@@ -61,6 +61,27 @@ test("nit уходит в entry, агент не будится", async () => {
   assert.match(ctx.calls.entry[0].value, /переименуй/);
 });
 
+test("шаг без текста не зовёт модель", async () => {
+  let called = 0;
+  const ctx = ctxWith("", [
+    { id: "1", role: "assistant", text: "  " },
+    { id: "2", role: "assistant", text: "" },
+  ]);
+  ctx.experimental.generate.text = async () => {
+    called += 1;
+    return { text: '{"severity":"nit","guidance":"ок"}' };
+  };
+  const r = await runReview({
+    ctx,
+    config,
+    sessionID: "s",
+    state: { lastSeenID: null, turns: 0 },
+    now: 1,
+  });
+  assert.equal(r.kind, "skipped");
+  assert.equal(called, 0);
+});
+
 test("blocker уходит synthetic со steer", async () => {
   const ctx = ctxWith('{"severity":"blocker","guidance":"стоп"}');
   await runReview({

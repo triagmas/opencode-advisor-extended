@@ -292,6 +292,10 @@ async function runReview({
     state.lastSeenID = delta.lastSeenID;
     if (delta.messages.length === 0)
       return { kind: "skipped", reason: "no-delta" };
+    const hasText = delta.messages.some(
+      (message) => typeof message.text === "string" && message.text.trim() !== ""
+    );
+    if (!hasText) return { kind: "skipped", reason: "no-text" };
     const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX);
     const prompt = `${REVIEWER_SYSTEM}
 

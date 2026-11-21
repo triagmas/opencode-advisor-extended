@@ -72,6 +72,14 @@ export async function runReview({
     if (delta.messages.length === 0)
       return { kind: "skipped", reason: "no-delta" };
 
+    // A tool-only step has no text to review; calling the model would only
+    // produce "your answer is empty" advice about work that did happen.
+    const hasText = delta.messages.some(
+      (message) =>
+        typeof message.text === "string" && message.text.trim() !== "",
+    );
+    if (!hasText) return { kind: "skipped", reason: "no-text" };
+
     const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX);
     const prompt = `${REVIEWER_SYSTEM}\n\n${buildReviewPrompt(transcript)}`;
 
