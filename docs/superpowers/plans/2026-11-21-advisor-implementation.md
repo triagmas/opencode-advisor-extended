@@ -779,11 +779,11 @@ git add -A && git commit -m "feat: work status section"
 - Create: `README.md`
 - Modify: `docs/superpowers/specs/2026-11-21-advisor-design.md` (только раздел «Статус»)
 
-- [ ] **Step 1: Написать README**
+- [x] **Step 1: Написать README**
 
 Установка (Settings → Extensions → Add → путь), что просит при установке, настройка модели, `/advisor`, где лежат файлы, что делать при `stale`/`disabled-with-reason`, как отключить.
 
-- [ ] **Step 2: Собрать и прогнать все тесты**
+- [x] **Step 2: Собрать и прогнать все тесты**
 
 Run: `npm run build && node --test test`
 Expected: PASS, без пропусков.
@@ -798,7 +798,7 @@ Expected: PASS, без пропусков.
 6. Выключить ревьюера → новых записей нет, статус «выключен».
 7. Work Status → последний совет и кнопка «в инпут».
 
-- [ ] **Step 4: Коммит и публикация**
+- [x] **Step 4: Коммит и публикация**
 
 ```bash
 git add -A && git commit -m "docs: install and manual checklist"
