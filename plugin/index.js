@@ -262,7 +262,13 @@ function toDeltaMessage(message) {
 function transcriptOf(messages) {
   return messages.map((message) => `${message.role}: ${message.text}`).join("\n\n");
 }
-async function runReview({ ctx, config, sessionID, state, now = Date.now() }) {
+async function runReview({
+  ctx,
+  config,
+  sessionID,
+  state,
+  now = Date.now()
+}) {
   const model = modelRef(config);
   if (!model) return { kind: "skipped", reason: "model-missing" };
   if (state.inFlight) return { kind: "skipped", reason: "busy" };
@@ -275,26 +281,39 @@ async function runReview({ ctx, config, sessionID, state, now = Date.now() }) {
     } catch {
       return { kind: "dropped", reason: "error", ms: Date.now() - started };
     }
-    const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(toDeltaMessage);
-    const delta = collectDelta(messages, state.lastSeenID, config.maxDeltaMessages);
+    const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(
+      toDeltaMessage
+    );
+    const delta = collectDelta(
+      messages,
+      state.lastSeenID,
+      config.maxDeltaMessages
+    );
     state.lastSeenID = delta.lastSeenID;
-    if (delta.messages.length === 0) return { kind: "skipped", reason: "no-delta" };
+    if (delta.messages.length === 0)
+      return { kind: "skipped", reason: "no-delta" };
     const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX);
     const prompt = `${REVIEWER_SYSTEM}
 
 ${buildReviewPrompt(transcript)}`;
     let text2;
     try {
-      const answer = await ctx.experimental.generate.text({ model, prompt });
+      const answer = await ctx.experimental.generate.text({
+        model: { providerID: model.providerID, id: model.modelID },
+        prompt
+      });
       text2 = typeof answer?.text === "string" ? answer.text.trim() : "";
     } catch {
       return { kind: "dropped", reason: "error", ms: Date.now() - started };
     }
     const ms = Date.now() - started;
-    if (state.disabled || !config.enabled) return { kind: "skipped", reason: "disabled", ms };
-    if (text2 === "" || text2 === NO_ADVICE) return { kind: "dropped", reason: "empty", ms };
+    if (state.disabled || !config.enabled)
+      return { kind: "skipped", reason: "disabled", ms };
+    if (text2 === "" || text2 === NO_ADVICE)
+      return { kind: "dropped", reason: "empty", ms };
     let frame = parseAdviceFrame(text2);
-    if (!frame && config.proseFallback) frame = { severity: "nit", guidance: text2 };
+    if (!frame && config.proseFallback)
+      frame = { severity: "nit", guidance: text2 };
     if (!frame) return { kind: "dropped", reason: "unparsed", ms };
     const note = limitText(frame.guidance, config.noteMaxChars);
     if (note === "") return { kind: "dropped", reason: "empty", ms };
@@ -308,7 +327,11 @@ ${buildReviewPrompt(transcript)}`;
           delivery: "steer"
         });
       }
-      await ctx.session.instructions?.entry?.put({ sessionID, key: NOTE_KEY, value: delivered });
+      await ctx.session.instructions?.entry?.put({
+        sessionID,
+        key: NOTE_KEY,
+        value: delivered
+      });
     } catch {
       return { kind: "dropped", reason: "error", ms };
     }

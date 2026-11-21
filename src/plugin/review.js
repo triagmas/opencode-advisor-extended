@@ -1,35 +1,37 @@
-import { collectDelta } from '../core/delta.js'
-import { parseAdviceFrame } from '../core/frame.js'
-import { limitText } from '../core/limits.js'
-import { markReviewed } from '../core/scope.js'
-import { modelRef } from '../core/config.js'
-import { buildReviewPrompt, REVIEWER_SYSTEM } from './prompts.js'
+import { collectDelta } from "../core/delta.js";
+import { parseAdviceFrame } from "../core/frame.js";
+import { limitText } from "../core/limits.js";
+import { markReviewed } from "../core/scope.js";
+import { modelRef } from "../core/config.js";
+import { buildReviewPrompt, REVIEWER_SYSTEM } from "./prompts.js";
 
-const DELTA_MAX = 16_000
-const NOTE_KEY = 'advisor-note'
-export const NO_ADVICE = 'NO_ADVICE'
+const DELTA_MAX = 16_000;
+const NOTE_KEY = "advisor-note";
+export const NO_ADVICE = "NO_ADVICE";
 
 function messageText(message) {
   if (Array.isArray(message?.content)) {
     return message.content
-      .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
       .map((part) => part.text)
-      .join('\n')
+      .join("\n");
   }
-  return typeof message?.text === 'string' ? message.text : ''
+  return typeof message?.text === "string" ? message.text : "";
 }
 
 function toDeltaMessage(message) {
   return {
     id: message?.id,
-    role: message?.type ?? message?.role ?? 'user',
+    role: message?.type ?? message?.role ?? "user",
     text: messageText(message),
     description: message?.description,
-  }
+  };
 }
 
 function transcriptOf(messages) {
-  return messages.map((message) => `${message.role}: ${message.text}`).join('\n\n')
+  return messages
+    .map((message) => `${message.role}: ${message.text}`)
+    .join("\n\n");
 }
 
 /**
@@ -37,69 +39,93 @@ function transcriptOf(messages) {
  * model for a graded note, and delivers it into the agent's context. Never
  * throws: every failure is a result the caller can count.
  */
-export async function runReview({ ctx, config, sessionID, state, now = Date.now() }) {
-  const model = modelRef(config)
-  if (!model) return { kind: 'skipped', reason: 'model-missing' }
-  if (state.inFlight) return { kind: 'skipped', reason: 'busy' }
+export async function runReview({
+  ctx,
+  config,
+  sessionID,
+  state,
+  now = Date.now(),
+}) {
+  const model = modelRef(config);
+  if (!model) return { kind: "skipped", reason: "model-missing" };
+  if (state.inFlight) return { kind: "skipped", reason: "busy" };
 
-  state.inFlight = true
-  const started = Date.now()
+  state.inFlight = true;
+  const started = Date.now();
   try {
-    let rawMessages
+    let rawMessages;
     try {
-      rawMessages = await ctx.session.context({ sessionID })
+      rawMessages = await ctx.session.context({ sessionID });
     } catch {
-      return { kind: 'dropped', reason: 'error', ms: Date.now() - started }
+      return { kind: "dropped", reason: "error", ms: Date.now() - started };
     }
 
-    const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(toDeltaMessage)
-    const delta = collectDelta(messages, state.lastSeenID, config.maxDeltaMessages)
-    state.lastSeenID = delta.lastSeenID
-    if (delta.messages.length === 0) return { kind: 'skipped', reason: 'no-delta' }
+    const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(
+      toDeltaMessage,
+    );
+    const delta = collectDelta(
+      messages,
+      state.lastSeenID,
+      config.maxDeltaMessages,
+    );
+    state.lastSeenID = delta.lastSeenID;
+    if (delta.messages.length === 0)
+      return { kind: "skipped", reason: "no-delta" };
 
-    const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX)
-    const prompt = `${REVIEWER_SYSTEM}\n\n${buildReviewPrompt(transcript)}`
+    const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX);
+    const prompt = `${REVIEWER_SYSTEM}\n\n${buildReviewPrompt(transcript)}`;
 
-    let text
+    let text;
     try {
-      const answer = await ctx.experimental.generate.text({ model, prompt })
-      text = typeof answer?.text === 'string' ? answer.text.trim() : ''
+      // OpenCode's stateless generator takes a Model.Ref: providerID + id.
+      const answer = await ctx.experimental.generate.text({
+        model: { providerID: model.providerID, id: model.modelID },
+        prompt,
+      });
+      text = typeof answer?.text === "string" ? answer.text.trim() : "";
     } catch {
-      return { kind: 'dropped', reason: 'error', ms: Date.now() - started }
+      return { kind: "dropped", reason: "error", ms: Date.now() - started };
     }
 
-    const ms = Date.now() - started
+    const ms = Date.now() - started;
 
     // The user may switch the reviewer off while the model is thinking.
-    if (state.disabled || !config.enabled) return { kind: 'skipped', reason: 'disabled', ms }
-    if (text === '' || text === NO_ADVICE) return { kind: 'dropped', reason: 'empty', ms }
+    if (state.disabled || !config.enabled)
+      return { kind: "skipped", reason: "disabled", ms };
+    if (text === "" || text === NO_ADVICE)
+      return { kind: "dropped", reason: "empty", ms };
 
-    let frame = parseAdviceFrame(text)
-    if (!frame && config.proseFallback) frame = { severity: 'nit', guidance: text }
-    if (!frame) return { kind: 'dropped', reason: 'unparsed', ms }
+    let frame = parseAdviceFrame(text);
+    if (!frame && config.proseFallback)
+      frame = { severity: "nit", guidance: text };
+    if (!frame) return { kind: "dropped", reason: "unparsed", ms };
 
-    const note = limitText(frame.guidance, config.noteMaxChars)
-    if (note === '') return { kind: 'dropped', reason: 'empty', ms }
+    const note = limitText(frame.guidance, config.noteMaxChars);
+    if (note === "") return { kind: "dropped", reason: "empty", ms };
 
-    const delivered = `[advisor:${frame.severity}] ${note}`
+    const delivered = `[advisor:${frame.severity}] ${note}`;
     try {
-      if (frame.severity !== 'nit') {
+      if (frame.severity !== "nit") {
         await ctx.session.synthetic({
           sessionID,
           text: delivered,
           description: `advisor:${frame.severity}`,
-          delivery: 'steer',
-        })
+          delivery: "steer",
+        });
       }
-      await ctx.session.instructions?.entry?.put({ sessionID, key: NOTE_KEY, value: delivered })
+      await ctx.session.instructions?.entry?.put({
+        sessionID,
+        key: NOTE_KEY,
+        value: delivered,
+      });
     } catch {
-      return { kind: 'dropped', reason: 'error', ms }
+      return { kind: "dropped", reason: "error", ms };
     }
 
-    if (frame.severity !== 'nit') markReviewed(state, now, config.immuneTurns)
+    if (frame.severity !== "nit") markReviewed(state, now, config.immuneTurns);
 
-    return { kind: 'delivered', severity: frame.severity, note, ms }
+    return { kind: "delivered", severity: frame.severity, note, ms };
   } finally {
-    state.inFlight = false
+    state.inFlight = false;
   }
 }
