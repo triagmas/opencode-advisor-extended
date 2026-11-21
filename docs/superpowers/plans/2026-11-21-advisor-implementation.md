@@ -343,7 +343,7 @@ git add src/core/config.js test/core/config.test.js && git commit -m "feat: conf
 **Interfaces:**
 - Produces: `statusFileName(locationDir): string`; `buildStatus(prev, patch, now): object`; `isStale(status, now, ttlMs = 30_000): boolean`; `emptyCounters(): { calls, drops: { empty, unparsed, error } }`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```js
 // test/core/status.test.js
@@ -365,21 +365,21 @@ test('устаревание по TTL', () => {
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/core/status.test.js`
 Expected: FAIL — модуля нет.
 
-- [ ] **Step 3: Реализовать модуль**
+- [x] **Step 3: Реализовать модуль**
 
 `buildStatus(prev = {}, patch = {}, now = Date.now())` — поверхностное слияние, `drops` сливается по ключам, `at: now`. `isStale(status, now, ttl)` — `!status || now - status.at > ttl`.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `node --test test/core/status.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add src/core/status.js test/core/status.test.js && git commit -m "feat: status heartbeat model"
