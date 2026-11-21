@@ -583,6 +583,8 @@ async function setup(ctx) {
     } catch {
       info = null;
     }
+    const sessionDir = info?.location?.directory;
+    if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
     const archived = Boolean(info?.time?.archived ?? info?.archived);
     if (info && !shouldReview({ parentID: info.parentID, archived })) return;
     if (state.inFlight) return;

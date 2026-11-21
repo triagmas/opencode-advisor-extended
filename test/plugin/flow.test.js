@@ -66,3 +66,22 @@ test('шаг с советом попадает в журнал и счётчи�
 
   await dispose()
 })
+
+test('шаг сессии из другого location не ревьюится', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
+  mkdirSync(join(dir, 'config'), { recursive: true })
+  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
+
+  const ctx = ctxFor(dir, '{"severity":"concern","guidance":"чужой совет"}')
+  ctx.session.get = async () => ({ time: { created: 1 }, location: { directory: '/other' } })
+  const dispose = await plugin.setup(ctx)
+  await new Promise((resolve) => setTimeout(resolve, 120))
+
+  const stateDir = join(dir, 'state')
+  const journals = readdirSync(stateDir).filter((name) => name.endsWith('.jsonl'))
+  assert.deepEqual(journals, [], 'no journal entries for a foreign session')
+  assert.equal(ctx.synthetics.length, 0)
+  assert.equal(ctx.entries.length, 0)
+
+  await dispose()
+})
