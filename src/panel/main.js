@@ -280,6 +280,9 @@ function formatTime(at) {
 }
 
 function settingsEditing() {
+  // An open select owns the interaction: re-rendering under it closes the
+  // popup. Text fields need the same break while they are being typed into.
+  if (settingsPane.querySelector('.oc-sdk-popup')) return true
   const active = document.activeElement
   if (!active || !settingsPane.contains(active)) return false
   return active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
@@ -393,11 +396,18 @@ function renderHead() {
   })
 }
 
+let renderedTab = null
+
 function render() {
   tabs.update({ activeId: state.tab })
-  panes.replaceChildren(
-    state.tab === 'journal' ? journalPane : state.tab === 'settings' ? settingsPane : statusPane,
-  )
+  // Swapping panes on every poll detaches the open select: its popup closes
+  // and the focused search field loses focus. Only switch on a tab change.
+  if (renderedTab !== state.tab) {
+    panes.replaceChildren(
+      state.tab === 'journal' ? journalPane : state.tab === 'settings' ? settingsPane : statusPane,
+    )
+    renderedTab = state.tab
+  }
   renderHead()
   if (state.tab === 'journal') renderJournal()
   if (state.tab === 'settings') renderSettings()

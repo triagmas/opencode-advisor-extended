@@ -2959,6 +2959,7 @@ ${GUEST_UI_LOOK_CSS}`;
     return new Date(at).toLocaleTimeString();
   }
   function settingsEditing() {
+    if (settingsPane.querySelector(".oc-sdk-popup")) return true;
     const active2 = document.activeElement;
     if (!active2 || !settingsPane.contains(active2)) return false;
     return active2.tagName === "INPUT" || active2.tagName === "TEXTAREA";
@@ -3060,11 +3061,15 @@ ${GUEST_UI_LOOK_CSS}`;
       tone: connection === "live" ? "success" : "warning"
     });
   }
+  var renderedTab = null;
   function render() {
     tabs.update({ activeId: state.tab });
-    panes.replaceChildren(
-      state.tab === "journal" ? journalPane : state.tab === "settings" ? settingsPane : statusPane
-    );
+    if (renderedTab !== state.tab) {
+      panes.replaceChildren(
+        state.tab === "journal" ? journalPane : state.tab === "settings" ? settingsPane : statusPane
+      );
+      renderedTab = state.tab;
+    }
     renderHead();
     if (state.tab === "journal") renderJournal();
     if (state.tab === "settings") renderSettings();
