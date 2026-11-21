@@ -92,3 +92,41 @@ test('журнал не перечитывается, пока файл не и�
     [1, 2, 3, 4],
   )
 })
+
+test('замена файла тем же размером не даёт взять старый счётчик строк', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-'))
+  const p = join(dir, 'journal-swap.jsonl')
+  let reads = 0
+  const fsp = await import('node:fs/promises')
+  const fsOps = {
+    mkdir: async (...args) => fsp.mkdir(...args),
+    stat: async (...args) => fsp.stat(...args),
+    readFile: async (...args) => {
+      reads += 1
+      return fsp.readFile(...args)
+    },
+    rename: async (...args) => fsp.rename(...args),
+    appendFile: async (...args) => fsp.appendFile(...args),
+  }
+
+  await appendRecord(p, { at: 1 }, fsOps)
+  const first = readFileSync(p, 'utf8')
+
+  // Same bytes, different file: a rotation by another instance, or a journal
+  // replaced wholesale. The rename gives a new inode, so the count must come
+  // from the new file; the timestamp is pushed forward for filesystems that
+  // report whole seconds only.
+  const swapped = join(dir, 'journal-swap.tmp')
+  writeFileSync(swapped, first.replace('{"at":1}', '{"at":9}'))
+  const later = new Date(Date.now() + 2000)
+  await fsp.utimes(swapped, later, later)
+  await fsp.rename(swapped, p)
+  await appendRecord(p, { at: 2 }, fsOps)
+
+  assert.equal(reads, 1)
+  const rows = readFileSync(p, 'utf8').trim().split('\n')
+  assert.deepEqual(
+    rows.map((line) => JSON.parse(line).at),
+    [9, 2],
+  )
+})

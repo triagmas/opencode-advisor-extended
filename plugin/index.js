@@ -125,7 +125,8 @@ async function appendRecord(path, record, fsOps = nodeFs) {
     size = info.size;
     if (size > 0) {
       const cached = known.get(path);
-      lines = cached && cached.size === size ? cached.lines : countJournalLines(await fsOps.readFile(path, "utf8"));
+      const same = cached && cached.size === size && cached.ino === info.ino && cached.mtimeMs === info.mtimeMs;
+      lines = same ? cached.lines : countJournalLines(await fsOps.readFile(path, "utf8"));
     }
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
@@ -138,7 +139,13 @@ async function appendRecord(path, record, fsOps = nodeFs) {
     lines = 0;
   }
   await fsOps.appendFile(path, line);
-  known.set(path, { size: size + bytes, lines: lines + 1 });
+  const after = await fsOps.stat(path).catch(() => null);
+  known.set(path, {
+    size: after?.size ?? size + bytes,
+    ino: after?.ino,
+    mtimeMs: after?.mtimeMs,
+    lines: lines + 1
+  });
 }
 
 // src/core/providers.js

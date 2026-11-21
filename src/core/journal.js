@@ -35,10 +35,17 @@ export async function appendRecord(path, record, fsOps = nodeFs) {
     size = info.size
     if (size > 0) {
       const cached = known.get(path)
-      lines =
-        cached && cached.size === size
-          ? cached.lines
-          : countJournalLines(await fsOps.readFile(path, 'utf8'))
+      // Inode, size and mtime together: a rotation replaces the inode, and a
+      // same-size rewrite by another process moves the mtime, so a stale count
+      // cannot be mistaken for the current file.
+      const same =
+        cached &&
+        cached.size === size &&
+        cached.ino === info.ino &&
+        cached.mtimeMs === info.mtimeMs
+      lines = same
+        ? cached.lines
+        : countJournalLines(await fsOps.readFile(path, 'utf8'))
     }
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error
@@ -55,5 +62,13 @@ export async function appendRecord(path, record, fsOps = nodeFs) {
   }
 
   await fsOps.appendFile(path, line)
-  known.set(path, { size: size + bytes, lines: lines + 1 })
+  // The inode and mtime of the file we just wrote: the next append can skip the
+  // read only when all three still match.
+  const after = await fsOps.stat(path).catch(() => null)
+  known.set(path, {
+    size: after?.size ?? size + bytes,
+    ino: after?.ino,
+    mtimeMs: after?.mtimeMs,
+    lines: lines + 1,
+  })
 }
