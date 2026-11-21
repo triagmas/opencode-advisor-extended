@@ -788,7 +788,7 @@ git add -A && git commit -m "feat: work status section"
 Run: `npm run build && node --test test`
 Expected: PASS, без пропусков.
 
-- [ ] **Step 3: Ручная проверка в OpenChamber (чеклист в README)** — вручную не прогнано, нужен живой OpenChamber.
+- [x] **Step 3: Ручная проверка в OpenChamber (чеклист в README)** — проверено 2026-11-21 через API и headless Chrome: установка, статус без модели, модель и live heartbeat, журнал и совет в контексте, synthetic+steer, выключение, Work Status. В п.4 ревьюер выбрал `concern`/`blocker`, не `nit`.
 
 1. Установка по пути → иконка на рейке, диалог прав с двумя паттернами и строкой про плагин.
 2. `/advisor status` без модели → текст про `model-missing`.
