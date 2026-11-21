@@ -2194,6 +2194,15 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return latest;
   }
+  function pickSuggestion(suggestions, dismissedAt = 0) {
+    let latest = null;
+    for (const item of Array.isArray(suggestions) ? suggestions : []) {
+      if (!item || typeof item.text !== "string" || item.text.trim() === "") continue;
+      if ((item.at ?? 0) <= dismissedAt) continue;
+      if (latest === null || (item.at ?? 0) > (latest.at ?? 0)) latest = item;
+    }
+    return latest;
+  }
   function countForSession(records, sessionID) {
     if (!sessionID) return 0;
     return (Array.isArray(records) ? records : []).filter(
@@ -2203,10 +2212,20 @@ ${GUEST_UI_LOOK_CSS}`;
   function boot() {
     const host = connectHost();
     const root = document.getElementById("root");
+    const DISMISS_KEY = "advisor:suggestion-dismissed";
+    const dismissedAt = () => {
+      try {
+        return Number(window.localStorage.getItem(DISMISS_KEY)) || 0;
+      } catch {
+        return 0;
+      }
+    };
     const state = {
       sessionID: null,
       records: [],
-      status: null
+      status: null,
+      suggestion: null,
+      suggestionDismissedAt: dismissedAt()
     };
     const element = (tag, className, text) => {
       const node = document.createElement(tag);
@@ -2233,6 +2252,36 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       if (state.status?.reason === "model-missing") {
         banner("\u041C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0437\u0430\u0434\u0430\u043D\u0430", "\u0417\u0430\u0434\u0430\u0439\u0442\u0435 provider \u0438 model \u0432 \u043F\u0430\u043D\u0435\u043B\u0438 Advisor.", "info");
+      }
+      if (state.suggestion) {
+        const box = element("div", "status-suggestion");
+        box.append(element("p", "status-note", state.suggestion.text));
+        const actions2 = element("div", "status-actions");
+        mountButton(actions2, {
+          label: "\u0412 \u0438\u043D\u043F\u0443\u0442",
+          size: "xs",
+          variant: "default",
+          onClick: () => {
+            void host.compose({ text: state.suggestion?.text ?? "" }).catch(() => {
+            });
+          }
+        });
+        mountButton(actions2, {
+          label: "\u0421\u043A\u0440\u044B\u0442\u044C",
+          size: "xs",
+          variant: "ghost",
+          onClick: () => {
+            state.suggestionDismissedAt = state.suggestion?.at ?? Date.now();
+            state.suggestion = null;
+            try {
+              window.localStorage.setItem(DISMISS_KEY, String(state.suggestionDismissedAt));
+            } catch {
+            }
+            render();
+          }
+        });
+        box.append(actions2);
+        root.append(box);
       }
       const count = countForSession(state.records, state.sessionID);
       root.append(element("div", "status-count", `\u0421\u043E\u0432\u0435\u0442\u043E\u0432 \u0437\u0430 \u0441\u0435\u0441\u0441\u0438\u044E: ${count}`));
@@ -2269,6 +2318,7 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       const journals = [];
       const statuses = [];
+      const suggestions = [];
       for (const entry of entries) {
         if (entry.kind !== "file") continue;
         const path = `${STATE_DIR}/${entry.name}`;
@@ -2277,19 +2327,26 @@ ${GUEST_UI_LOOK_CSS}`;
             journals.push(parseJournal((await host.readFile(path)).content));
           } else if (entry.name.startsWith("status-") && entry.name.endsWith(".json")) {
             statuses.push(JSON.parse((await host.readFile(path)).content));
+          } else if (entry.name.startsWith("suggestion-") && entry.name.endsWith(".json")) {
+            suggestions.push(JSON.parse((await host.readFile(path)).content));
           }
         } catch {
         }
       }
       const status = statuses.reduce((best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best, null);
-      return { records: mergeRecords(journals), status };
+      return {
+        records: mergeRecords(journals),
+        status,
+        suggestion: pickSuggestion(suggestions, state.suggestionDismissedAt)
+      };
     }
     async function refresh() {
       if (document.visibilityState !== "visible") return;
       try {
-        const { records, status } = await readAll();
+        const { records, status, suggestion } = await readAll();
         state.records = records;
         state.status = status;
+        state.suggestion = suggestion;
       } catch {
       }
       render();

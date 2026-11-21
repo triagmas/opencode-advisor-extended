@@ -31,8 +31,6 @@ const state = {
   status: null,
   config: { ...DEFAULTS },
   providers: [],
-  suggestion: null,
-  suggestionDismissedAt: 0,
   draft: null,
   message: null,
 }
@@ -52,8 +50,6 @@ style.textContent = `
   .adv-status-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--oc-border); }
   .adv-status-label { color: var(--oc-muted); }
   .adv-status-value { text-align: right; overflow-wrap: anywhere; }
-  .adv-suggest { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted); }
-  .adv-suggest-text { font-style: italic; overflow-wrap: anywhere; }
 `
 document.head.append(style)
 
@@ -73,14 +69,7 @@ head.append(headTitle, headBadge)
 const tabsHost = element('div')
 const panes = element('div', 'adv-pane')
 
-// Next message the model expects, offered as input text — never sent by itself.
-const suggestBox = element('div', 'adv-suggest')
-const suggestText = element('div', 'adv-suggest-text')
-const suggestActions = element('div', 'adv-actions')
-suggestBox.append(suggestText, suggestActions)
-suggestBox.hidden = true
-
-layout.append(head, suggestBox, tabsHost, panes)
+layout.append(head, tabsHost, panes)
 root.append(layout)
 
 // --- journal --------------------------------------------------------------
@@ -425,34 +414,6 @@ function averageLatency() {
   return Math.round(values.reduce((sum, ms) => sum + ms, 0) / values.length)
 }
 
-function renderSuggestion() {
-  const suggestion = state.suggestion
-  if (!suggestion?.text) {
-    suggestBox.hidden = true
-    return
-  }
-  suggestBox.hidden = false
-  suggestText.textContent = suggestion.text
-  if (suggestActions.childElementCount === 0) {
-    mountButton(suggestActions, {
-      label: 'В инпут',
-      variant: 'default',
-      onClick: () => {
-        void host.compose({ text: suggestion.text ?? state.suggestion?.text ?? '' })
-      },
-    })
-    mountButton(suggestActions, {
-      label: 'Скрыть',
-      variant: 'ghost',
-      onClick: () => {
-        state.suggestionDismissedAt = state.suggestion?.at ?? Date.now()
-        state.suggestion = null
-        renderSuggestion()
-      },
-    })
-  }
-}
-
 function renderHead() {
   headBadge.replaceChildren()
   const connection = connectionState(state.status, Date.now())
@@ -475,7 +436,6 @@ function render() {
     renderedTab = state.tab
   }
   renderHead()
-  renderSuggestion()
   if (state.tab === 'journal') renderJournal()
   if (state.tab === 'settings') renderSettings()
   if (state.tab === 'status') renderStatus()
@@ -494,7 +454,6 @@ async function updateState() {
 
   const journals = []
   const statuses = []
-  const suggestions = []
   for (const entry of entries) {
     const path = `${STATE_DIR}/${entry.name}`
     try {
@@ -504,9 +463,6 @@ async function updateState() {
       } else if (entry.name.startsWith('status-') && entry.name.endsWith('.json')) {
         const { content } = await host.readFile(path)
         statuses.push(JSON.parse(content))
-      } else if (entry.name.startsWith('suggestion-') && entry.name.endsWith('.json')) {
-        const { content } = await host.readFile(path)
-        suggestions.push(JSON.parse(content))
       }
     } catch {
       // One unreadable file must not hide the rest of the journal.
@@ -522,14 +478,6 @@ async function updateState() {
     state.providers = []
   }
 
-  const latestSuggestion = suggestions.reduce(
-    (best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best),
-    null,
-  )
-  // A dismissed suggestion stays gone until the plugin writes a newer one.
-  if (latestSuggestion && (latestSuggestion.at ?? 0) > state.suggestionDismissedAt) {
-    state.suggestion = latestSuggestion
-  }
   state.records = mergeRecords(journals)
   state.status = statuses.reduce((best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best), null)
 }

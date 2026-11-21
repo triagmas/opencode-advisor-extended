@@ -18,6 +18,17 @@ export function latestForSession(records, sessionID) {
   return latest
 }
 
+/** Newest suggestion the person has not dismissed yet. */
+export function pickSuggestion(suggestions, dismissedAt = 0) {
+  let latest = null
+  for (const item of Array.isArray(suggestions) ? suggestions : []) {
+    if (!item || typeof item.text !== 'string' || item.text.trim() === '') continue
+    if ((item.at ?? 0) <= dismissedAt) continue
+    if (latest === null || (item.at ?? 0) > (latest.at ?? 0)) latest = item
+  }
+  return latest
+}
+
 export function countForSession(records, sessionID) {
   if (!sessionID) return 0
   return (Array.isArray(records) ? records : []).filter(
@@ -29,10 +40,21 @@ function boot() {
   const host = connectHost()
   const root = document.getElementById('root')
 
+  const DISMISS_KEY = 'advisor:suggestion-dismissed'
+  const dismissedAt = () => {
+    try {
+      return Number(window.localStorage.getItem(DISMISS_KEY)) || 0
+    } catch {
+      return 0
+    }
+  }
+
   const state = {
     sessionID: null,
     records: [],
     status: null,
+    suggestion: null,
+    suggestionDismissedAt: dismissedAt(),
   }
 
   const element = (tag, className, text) => {
@@ -66,6 +88,37 @@ function boot() {
 
     if (state.status?.reason === 'model-missing') {
       banner('Модель не задана', 'Задайте provider и model в панели Advisor.', 'info')
+    }
+
+    if (state.suggestion) {
+      const box = element('div', 'status-suggestion')
+      box.append(element('p', 'status-note', state.suggestion.text))
+      const actions = element('div', 'status-actions')
+      mountButton(actions, {
+        label: 'В инпут',
+        size: 'xs',
+        variant: 'default',
+        onClick: () => {
+          void host.compose({ text: state.suggestion?.text ?? '' }).catch(() => {})
+        },
+      })
+      mountButton(actions, {
+        label: 'Скрыть',
+        size: 'xs',
+        variant: 'ghost',
+        onClick: () => {
+          state.suggestionDismissedAt = state.suggestion?.at ?? Date.now()
+          state.suggestion = null
+          try {
+            window.localStorage.setItem(DISMISS_KEY, String(state.suggestionDismissedAt))
+          } catch {
+            // Storage may be denied in the frame: the dismissal still holds for this view.
+          }
+          render()
+        },
+      })
+      box.append(actions)
+      root.append(box)
     }
 
     const count = countForSession(state.records, state.sessionID)
@@ -107,6 +160,7 @@ function boot() {
 
     const journals = []
     const statuses = []
+    const suggestions = []
     for (const entry of entries) {
       if (entry.kind !== 'file') continue
       const path = `${STATE_DIR}/${entry.name}`
@@ -115,6 +169,8 @@ function boot() {
           journals.push(parseJournal((await host.readFile(path)).content))
         } else if (entry.name.startsWith('status-') && entry.name.endsWith('.json')) {
           statuses.push(JSON.parse((await host.readFile(path)).content))
+        } else if (entry.name.startsWith('suggestion-') && entry.name.endsWith('.json')) {
+          suggestions.push(JSON.parse((await host.readFile(path)).content))
         }
       } catch {
         // One unreadable file must not hide the rest.
@@ -122,15 +178,20 @@ function boot() {
     }
 
     const status = statuses.reduce((best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best), null)
-    return { records: mergeRecords(journals), status }
+    return {
+      records: mergeRecords(journals),
+      status,
+      suggestion: pickSuggestion(suggestions, state.suggestionDismissedAt),
+    }
   }
 
   async function refresh() {
     if (document.visibilityState !== 'visible') return
     try {
-      const { records, status } = await readAll()
+      const { records, status, suggestion } = await readAll()
       state.records = records
       state.status = status
+      state.suggestion = suggestion
     } catch {
       // Keep the last picture and retry on the next tick.
     }
