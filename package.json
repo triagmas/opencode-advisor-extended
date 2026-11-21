@@ -7,7 +7,9 @@
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "lint": "oxlint .",
+    "format": "prettier --write ."
   },
   "openchamber": {
     "apiVersion": 1,
@@ -39,6 +41,8 @@
   "devDependencies": {
     "@openchamber/sdk": "^2.7.3",
     "@opencode/plugin": "^2.3.2",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "oxlint": "^1.94.0",
+    "prettier": "^3.10.1"
   }
 }

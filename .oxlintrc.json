@@ -1,0 +1,3 @@
+{
+  "ignorePatterns": ["node_modules", "panel/main.js", "status/main.js", "plugin/index.js"]
+}
