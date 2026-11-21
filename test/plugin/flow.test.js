@@ -115,21 +115,32 @@ test('две сессии в одном потоке: ревьюится тол�
   await dispose()
 })
 
-test('две сессии одной папки: каждая получает свой совет', async () => {
+test('две сессии одной папки: совет каждой сессии свой', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
   mkdirSync(join(dir, 'config'), { recursive: true })
   writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
 
-  const ctx = ctxFor(dir, '{"severity":"concern","guidance":"совет"}')
+  const ctx = ctxFor(dir, '')
   ctx.event = {
     subscribe: () => ({
       async *[Symbol.asyncIterator]() {
+        // Both steps end in one stream, as on a server that serves one folder
+        // with two open sessions.
         yield { type: 'session.step.ended', data: { sessionID: 'a' } }
         yield { type: 'session.step.ended', data: { sessionID: 'b' } }
       },
     }),
   }
+  const contexts = {
+    a: [{ id: 'a1', type: 'user', text: 'сессия МАРКЕР-А' }],
+    b: [{ id: 'b1', type: 'user', text: 'сессия МАРКЕР-Б' }],
+  }
   ctx.session.get = async () => ({ time: { created: 1 }, location: { directory: '/proj' } })
+  ctx.session.context = async ({ sessionID }) => contexts[sessionID]
+  ctx.experimental.generate.text = async ({ prompt }) => {
+    const seen = prompt.includes('МАРКЕР-Б') ? 'Б' : 'А'
+    return { text: `{"severity":"concern","guidance":"совет для ${seen}"}` }
+  }
 
   const dispose = await plugin.setup(ctx)
   await new Promise((resolve) => setTimeout(resolve, 200))
@@ -138,7 +149,12 @@ test('две сессии одной папки: каждая получает �
   const journal = readdirSync(stateDir).find((name) => name.endsWith('.jsonl'))
   const rows = readFileSync(join(stateDir, journal), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
   assert.deepEqual(rows.map((row) => row.sessionID), ['a', 'b'])
+  assert.match(rows[0].note, /для А/)
+  assert.match(rows[1].note, /для Б/)
   assert.deepEqual(ctx.synthetics.map((x) => x.sessionID), ['a', 'b'])
+  assert.match(ctx.synthetics[0].text, /для А/)
+  assert.match(ctx.synthetics[1].text, /для Б/)
+  assert.deepEqual(ctx.entries.map((x) => x.sessionID), ['a', 'b'])
 
   await dispose()
 })
