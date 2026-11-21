@@ -486,7 +486,7 @@ git add src/core/scope.js src/core/delta.js test/core && git commit -m "feat: se
 - Consumes: Task 4 `normalizeConfig`, Task 5 `buildStatus`, Task 3 `appendRecord`.
 - Produces: default export `{ id: 'advisor', setup(ctx) }`; `setup` возвращает `dispose()`; регистрирует команды `advisor.on|off|status|model`.
 
-- [ ] **Step 1: Написать падающий тест на фейковом ctx**
+- [x] **Step 1: Написать падающий тест на фейковом ctx**
 
 ```js
 // test/plugin/setup.test.js
@@ -531,23 +531,23 @@ test('без модели команда status сообщает причину'
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/plugin/setup.test.js`
 Expected: FAIL — модуля нет.
 
-- [ ] **Step 3: Реализовать каркас**
+- [x] **Step 3: Реализовать каркас**
 
 `setup(ctx)`: определить каталоги (`~/.config/openchamber-advisor`, `~/.local/state/openchamber-advisor`) через `ctx.location.directory`; прочитать/создать `config.json`; `normalizeConfig`; подписаться на `session.step.started`, `session.step.ended`, `session.execution.succeeded`, `session.execution.failed`; зарегистрировать команду `advisor` с подкомандами `on|off|status|model set|model reset`; запустить heartbeat (`setInterval` 10 000 мс, `unref()`), писать `status-<loc>.json`; вернуть `dispose`, который чистит таймер, подписки и `fs.watch` конфига.
 
 Разбор аргументов команды — отдельная чистая функция `parseCommand(args)` в `src/core/command.js` с тестом: `''` → toggle, `on`, `off`, `status`, `model set p/m`, `model reset`, мусор → `{ kind: 'usage' }`. Ветка `model set` пишет пару в `config.json` (файл перечитывается `fs.watch`), `model reset` удаляет пару из конфига; обе отвечают через `synthetic`.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `node --test test/plugin test/core/command.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add src/plugin src/core/command.js test && git commit -m "feat: plugin skeleton, config, heartbeat and /advisor"

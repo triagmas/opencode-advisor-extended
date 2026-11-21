@@ -1,5 +1,270 @@
-// OpenCode plugin entry. Filled in by the plugin task; the build needs a source file now.
-export default {
-  id: 'advisor',
-  setup() {},
+import { watch } from 'node:fs'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+
+import { parseCommand } from '../core/command.js'
+import { DEFAULTS, modelRef, normalizeConfig } from '../core/config.js'
+import { journalFileName } from '../core/journal-format.js'
+import { limitText } from '../core/limits.js'
+import { buildStatus, emptyCounters, statusFileName } from '../core/status.js'
+
+export const PLUGIN_VERSION = '0.1.0'
+
+const HEARTBEAT_MS = 10_000
+const ANSWER_MAX = 500
+const NOTE_KEY = 'advisor-note'
+const EVENT_TYPES = [
+  'session.step.started',
+  'session.step.ended',
+  'session.execution.succeeded',
+  'session.execution.failed',
+]
+
+const USAGE_TEXT =
+  'advisor: on | off | status | model set <provider>/<model> | model reset'
+
+function modelLabel(config) {
+  const ref = modelRef(config)
+  return ref ? `${ref.providerID}/${ref.modelID}` : null
 }
+
+async function readJson(path) {
+  try {
+    return JSON.parse(await readFile(path, 'utf8'))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    // A half-written or hand-broken file: fall back to defaults, do not throw.
+    return {}
+  }
+}
+
+async function writeJsonAtomic(path, value) {
+  await mkdir(dirname(path), { recursive: true })
+  const temp = `${path}.${process.pid}.tmp`
+  await writeFile(temp, JSON.stringify(value, null, 2) + '\n')
+  await rename(temp, path)
+}
+
+/**
+ * OpenCode plugin: reviews a finished step with a separate model, delivers a
+ * graded note into the agent's context, and keeps the journal and heartbeat the
+ * OpenChamber panel reads.
+ */
+export async function setup(ctx) {
+  const options = ctx.options ?? {}
+  const home = options.homeDir ?? homedir()
+  const configDir = options.configDir ?? join(home, '.config', 'openchamber-advisor')
+  const stateDir = options.stateDir ?? join(home, '.local', 'state', 'openchamber-advisor')
+  const locationDir = resolve(String(ctx.location?.directory ?? process.cwd()))
+
+  const configPath = join(configDir, 'config.json')
+  const statusPath = join(stateDir, statusFileName(locationDir))
+  const journalPath = join(stateDir, journalFileName(locationDir))
+
+  await mkdir(configDir, { recursive: true })
+  await mkdir(stateDir, { recursive: true })
+
+  let raw = await readJson(configPath)
+  if (raw === null) {
+    raw = { ...DEFAULTS }
+    await writeJsonAtomic(configPath, raw)
+  }
+
+  let applied = normalizeConfig(raw)
+  let config = applied.config
+  let errors = applied.errors
+
+  const sessions = new Map()
+  const stateOf = (sessionID) => {
+    let state = sessions.get(sessionID)
+    if (!state) {
+      state = { lastSeenID: null, turns: 0, immuneTurns: config.immuneTurns, inFlight: false, disabled: false, cooldownUntil: 0 }
+      sessions.set(sessionID, state)
+    }
+    return state
+  }
+
+  let status = buildStatus({ ...emptyCounters(), startedAt: Date.now(), pluginVersion: PLUGIN_VERSION }, {}, Date.now())
+  let queue = Promise.resolve()
+
+  const flush = (patch = {}) => {
+    status = buildStatus(status, patch, Date.now())
+    const snapshot = { ...status, at: Date.now() }
+    queue = queue.then(() => writeJsonAtomic(statusPath, snapshot)).catch(() => {})
+    return queue
+  }
+
+  await flush({
+    enabled: config.enabled,
+    model: modelLabel(config),
+    reason: errors[0] ?? null,
+    appVersion: ctx.app?.version ?? null,
+  })
+
+  const heartbeat = setInterval(() => {
+    void flush()
+  }, HEARTBEAT_MS)
+  heartbeat.unref?.()
+
+  async function reloadConfig() {
+    const fresh = await readJson(configPath)
+    if (fresh === null) return
+    applied = normalizeConfig(fresh)
+    config = applied.config
+    errors = applied.errors
+    await flush({ enabled: config.enabled, model: modelLabel(config), reason: errors[0] ?? null })
+  }
+
+  let watcher
+  try {
+    watcher = watch(configPath, { persistent: false }, () => {
+      void reloadConfig().catch(() => {})
+    })
+    watcher.unref?.()
+  } catch {
+    // No watcher means settings need a restart; everything else still works.
+  }
+
+  async function patchConfig(patch) {
+    const current = (await readJson(configPath)) ?? { ...config }
+    await writeJsonAtomic(configPath, { ...current, ...patch })
+    await reloadConfig()
+  }
+
+  const reply = (body) => {
+    const missing = errors.includes('model-missing')
+      ? ' Модель не задана (model-missing): укажите provider/model в панели или /advisor model set <provider>/<model>.'
+      : ''
+    return limitText(`Advisor: ${body}${missing}`, ANSWER_MAX)
+  }
+
+  function statusLine() {
+    const state = config.enabled ? 'включён' : 'выключен'
+    const model = modelLabel(config) ?? 'нет (model-missing)'
+    const last = status.lastAdviceAt ? new Date(status.lastAdviceAt).toLocaleTimeString() : 'советов ещё не было'
+    const latency = typeof status.lastMs === 'number' ? `${status.lastMs} мс` : '—'
+    return `состояние: ${state}; модель: ${model}; вызовов: ${status.calls}; дропов: ${status.drops.empty + status.drops.unparsed + status.drops.error}; последняя задержка: ${latency}; ${last}`
+  }
+
+  async function runCommand({ sessionID, prompt }) {
+    const parsed = parseCommand(prompt?.text ?? '')
+    const state = stateOf(sessionID)
+    let text
+
+    switch (parsed.kind) {
+      case 'toggle':
+        state.disabled = !state.disabled
+        text = reply(`сессия ${state.disabled ? 'выключена' : 'включена'}`)
+        break
+      case 'on':
+        state.disabled = false
+        text = reply('сессия включена')
+        break
+      case 'off':
+        state.disabled = true
+        text = reply('сессия выключена')
+        break
+      case 'status':
+        text = reply(statusLine())
+        break
+      case 'model-set':
+        await patchConfig({ provider: parsed.providerID, model: parsed.modelID })
+        text = reply(`модель: ${parsed.providerID}/${parsed.modelID}`)
+        break
+      case 'model-reset':
+        await patchConfig({ provider: DEFAULTS.provider, model: DEFAULTS.model })
+        text = reply('модель сброшена, задайте provider/model заново')
+        break
+      default:
+        text = reply(USAGE_TEXT)
+    }
+
+    await ctx.session.synthetic({ sessionID, text, description: 'advisor:status', delivery: 'steer' })
+  }
+
+  const registration = await ctx.command.transform((editor) => {
+    editor.add({ name: 'advisor', description: 'Advisor: on | off | status | model set|reset', execute: runCommand })
+  })
+
+  async function clearNote(sessionID) {
+    try {
+      await ctx.session.instructions?.entry?.remove({ sessionID, key: NOTE_KEY })
+    } catch {
+      // No entry support (older server): the note simply was not set.
+    }
+  }
+
+  async function handleEvent(event) {
+    switch (event?.type) {
+      case 'session.step.started': {
+        const sessionID = event.data?.sessionID
+        if (!sessionID) return
+        stateOf(sessionID).turns += 1
+        await clearNote(sessionID)
+        return
+      }
+      case 'session.step.ended': {
+        const sessionID = event.data?.sessionID
+        if (!sessionID) return
+        await onStepEnded(sessionID)
+        return
+      }
+      default:
+    }
+  }
+
+  // Filled in by the review task; the step loop keeps running without it.
+  async function onStepEnded(_sessionID) {}
+
+  async function consume(iterable) {
+    try {
+      for await (const event of iterable) {
+        try {
+          await handleEvent(event)
+        } catch {
+          // One bad event must not end the subscription.
+        }
+      }
+    } catch {
+      // Aborted on dispose, or the stream failed: the plugin keeps working.
+    }
+  }
+
+  const controller = new AbortController()
+  const subscription = ctx.event.subscribe({ types: EVENT_TYPES, signal: controller.signal })
+  let unsubscribe = () => {}
+  if (subscription && typeof subscription[Symbol.asyncIterator] === 'function') {
+    void consume(subscription)
+  } else if (typeof subscription === 'function') {
+    unsubscribe = subscription
+  }
+
+  return async function dispose() {
+    clearInterval(heartbeat)
+    controller.abort()
+    try {
+      watcher?.close()
+    } catch {
+      // Already closed.
+    }
+    try {
+      await unsubscribe()
+    } catch {
+      // Nothing to undo.
+    }
+    try {
+      await registration?.dispose?.()
+    } catch {
+      // Nothing to undo.
+    }
+    try {
+      await subscription?.return?.()
+    } catch {
+      // Nothing to undo.
+    }
+    sessions.clear()
+  }
+}
+
+export default { id: 'advisor', setup }
