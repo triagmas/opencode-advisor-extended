@@ -1,0 +1,10 @@
+{
+  "semi": false,
+  "singleQuote": true,
+  "overrides": [
+    {
+      "files": ["src/plugin/**/*.js", "test/plugin/**/*.js"],
+      "options": { "semi": true, "singleQuote": false, "printWidth": 80 }
+    }
+  ]
+}

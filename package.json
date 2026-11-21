@@ -31,6 +31,15 @@
         "title": "Advisor",
         "height": 200
       },
+      "blocks": [
+        {
+          "name": "AdvisorNext",
+          "description": "Advisor's next-step card with a button that puts the suggestion into the composer.",
+          "args": [],
+          "entry": "block/index.html",
+          "height": 96
+        }
+      ],
       "filesystem": [
         "~/.local/state/openchamber-advisor/**",
         "~/.config/openchamber-advisor/**"

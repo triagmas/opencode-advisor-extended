@@ -8,6 +8,7 @@ import { DEFAULTS, modelRef, normalizeConfig } from "../core/config.js";
 import { appendRecord } from "../core/journal.js";
 import { buildProvidersSnapshot } from "../core/providers.js";
 import { journalFileName, suggestionFileName } from "../core/journal-format.js";
+import { nextBlockInstruction } from "../core/next-block.js";
 import { buildNextPromptPrompt, parseSuggestion } from "../core/next-prompt.js";
 import { limitText } from "../core/limits.js";
 import { canReview, shouldReview } from "../core/scope.js";
@@ -422,7 +423,10 @@ export async function setup(ctx) {
         role: message?.type ?? message?.role ?? "user",
         text: Array.isArray(message?.content)
           ? message.content
-              .filter((part) => part?.type === "text" && typeof part.text === "string")
+              .filter(
+                (part) =>
+                  part?.type === "text" && typeof part.text === "string",
+              )
               .map((part) => part.text)
               .join("\n")
           : typeof message?.text === "string"
@@ -430,13 +434,18 @@ export async function setup(ctx) {
             : "",
         description: message?.description,
       }))
-      .filter((message) => !String(message.description ?? "").startsWith("advisor:"))
+      .filter(
+        (message) => !String(message.description ?? "").startsWith("advisor:"),
+      )
       .filter((message) => message.text.trim() !== "")
       .slice(-20);
     if (messages.length === 0) return;
 
     const transcript = messages
-      .map((message) => `${message.role === "user" ? "человек" : "агент"}: ${message.text}`)
+      .map(
+        (message) =>
+          `${message.role === "user" ? "человек" : "агент"}: ${message.text}`,
+      )
       .join("\n\n");
 
     state.suggesting = true;
@@ -478,6 +487,38 @@ export async function setup(ctx) {
     }
   }
 
+  // The card is an extension UI block, and only the agent can place one in a
+  // reply. One short line per request is the whole price of it. The hook itself
+  // must stay synchronous: the request is assembled right after it returns.
+  const ownedSessions = new Map();
+  const rememberOwner = (sessionID) => {
+    if (ownedSessions.has(sessionID)) return;
+    // Assume the session is ours until the lookup says otherwise.
+    ownedSessions.set(sessionID, true);
+    void ctx.session
+      .get({ sessionID })
+      .then((info) => {
+        const sessionDir = info?.location?.directory;
+        ownedSessions.set(
+          sessionID,
+          !sessionDir || resolve(String(sessionDir)) === locationDir,
+        );
+      })
+      .catch(() => {});
+  };
+  try {
+    await ctx.session.hook("context", (event) => {
+      if (!config.nextPrompt || !Array.isArray(event?.system)) return;
+      const sessionID = event.sessionID;
+      if (!sessionID) return;
+      rememberOwner(sessionID);
+      if (ownedSessions.get(sessionID) === false) return;
+      event.system.push({ type: "text", text: nextBlockInstruction(true) });
+    });
+  } catch {
+    // An OpenCode release without the context hook: the card is simply absent.
+  }
+
   const controller = new AbortController();
   const subscription = ctx.event.subscribe({
     types: EVENT_TYPES,
@@ -517,6 +558,7 @@ export async function setup(ctx) {
       // Nothing to undo.
     }
     sessions.clear();
+    ownedSessions.clear();
   };
 }
 

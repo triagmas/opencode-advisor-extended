@@ -165,6 +165,19 @@ function buildProvidersSnapshot(models, providers, now = Date.now()) {
   return { at: now, providers: list };
 }
 
+// src/core/next-block.js
+var NEXT_BLOCK_INSTRUCTION = [
+  "Advisor next-step card: end every reply with one fenced openui-lang block",
+  "that draws only the card, exactly like this:",
+  "```openui-lang",
+  "root = Stack([AdvisorNext()])",
+  "```",
+  "Put it last and do not describe it in text."
+].join("\n");
+function nextBlockInstruction(enabled) {
+  return enabled ? NEXT_BLOCK_INSTRUCTION : "";
+}
+
 // src/core/next-prompt.js
 var NEXT_PROMPT_MAX_CHARS = 120;
 var NEXT_PROMPT_LIMITS = { min: 50, max: 2e3 };
@@ -849,11 +862,17 @@ async function setup(ctx) {
     }
     const messages = (Array.isArray(raw2) ? raw2 : []).map((message) => ({
       role: message?.type ?? message?.role ?? "user",
-      text: Array.isArray(message?.content) ? message.content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n") : typeof message?.text === "string" ? message.text : "",
+      text: Array.isArray(message?.content) ? message.content.filter(
+        (part) => part?.type === "text" && typeof part.text === "string"
+      ).map((part) => part.text).join("\n") : typeof message?.text === "string" ? message.text : "",
       description: message?.description
-    })).filter((message) => !String(message.description ?? "").startsWith("advisor:")).filter((message) => message.text.trim() !== "").slice(-20);
+    })).filter(
+      (message) => !String(message.description ?? "").startsWith("advisor:")
+    ).filter((message) => message.text.trim() !== "").slice(-20);
     if (messages.length === 0) return;
-    const transcript = messages.map((message) => `${message.role === "user" ? "\u0447\u0435\u043B\u043E\u0432\u0435\u043A" : "\u0430\u0433\u0435\u043D\u0442"}: ${message.text}`).join("\n\n");
+    const transcript = messages.map(
+      (message) => `${message.role === "user" ? "\u0447\u0435\u043B\u043E\u0432\u0435\u043A" : "\u0430\u0433\u0435\u043D\u0442"}: ${message.text}`
+    ).join("\n\n");
     state.suggesting = true;
     try {
       const answer = await ctx.experimental.generate.text({
@@ -888,6 +907,30 @@ async function setup(ctx) {
     } catch {
     }
   }
+  const ownedSessions = /* @__PURE__ */ new Map();
+  const rememberOwner = (sessionID) => {
+    if (ownedSessions.has(sessionID)) return;
+    ownedSessions.set(sessionID, true);
+    void ctx.session.get({ sessionID }).then((info) => {
+      const sessionDir = info?.location?.directory;
+      ownedSessions.set(
+        sessionID,
+        !sessionDir || resolve(String(sessionDir)) === locationDir
+      );
+    }).catch(() => {
+    });
+  };
+  try {
+    await ctx.session.hook("context", (event) => {
+      if (!config.nextPrompt || !Array.isArray(event?.system)) return;
+      const sessionID = event.sessionID;
+      if (!sessionID) return;
+      rememberOwner(sessionID);
+      if (ownedSessions.get(sessionID) === false) return;
+      event.system.push({ type: "text", text: nextBlockInstruction(true) });
+    });
+  } catch {
+  }
   const controller = new AbortController();
   const subscription = ctx.event.subscribe({
     types: EVENT_TYPES,
@@ -920,6 +963,7 @@ async function setup(ctx) {
     } catch {
     }
     sessions.clear();
+    ownedSessions.clear();
   };
 }
 var index_default = { id: "advisor", setup };

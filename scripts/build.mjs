@@ -17,6 +17,12 @@ const builds = [
     platform: 'browser',
   },
   {
+    entryPoints: ['src/block/main.js'],
+    outfile: 'block/main.js',
+    format: 'iife',
+    platform: 'browser',
+  },
+  {
     entryPoints: ['src/plugin/index.js'],
     outfile: 'plugin/index.js',
     format: 'esm',

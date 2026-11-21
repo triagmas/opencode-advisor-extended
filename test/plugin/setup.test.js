@@ -64,6 +64,24 @@ test("регистрирует /advisor и подписку на шаги", asyn
   await dispose();
 });
 
+test("хук контекста дописывает карточку подсказки синхронно", async () => {
+  const ctx = fakeCtx();
+  const hooks = {};
+  ctx.session.hook = async (name, handler) => {
+    hooks[name] = handler;
+    return { dispose() {} };
+  };
+  const dispose = await plugin.setup(ctx);
+  assert.equal(typeof hooks.context, "function");
+
+  const event = { sessionID: "s1", system: [] };
+  hooks.context(event);
+  assert.equal(event.system.length, 1);
+  assert.match(event.system[0].text, /AdvisorNext\(\)/);
+
+  await dispose();
+});
+
 test("без модели команда status сообщает причину", async () => {
   const ctx = fakeCtx();
   const dispose = await plugin.setup(ctx);

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Advisor</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        color: var(--oc-fg);
+        background: transparent;
+        font-family: var(--oc-font);
+      }
+      #root {
+        box-sizing: border-box;
+        padding: 2px 0 4px;
+      }
+      .next-card {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px 10px;
+        border: 1px solid var(--oc-border);
+        border-radius: var(--oc-radius, 8px);
+        background: var(--oc-muted-surface);
+      }
+      .next-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .next-label {
+        color: var(--oc-muted);
+        font-size: 0.75rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .next-actions {
+        display: flex;
+        gap: 4px;
+      }
+      .next-text {
+        margin: 0;
+        font-size: 0.875rem;
+        font-style: italic;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="./main.js"></script>
+  </body>
+</html>
