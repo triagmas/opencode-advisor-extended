@@ -2194,11 +2194,12 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return latest;
   }
-  function pickSuggestion(suggestions, dismissedAt = 0) {
+  function pickSuggestion(suggestions, dismissedAt = 0, sessionID = null) {
     let latest = null;
     for (const item of Array.isArray(suggestions) ? suggestions : []) {
       if (!item || typeof item.text !== "string" || item.text.trim() === "") continue;
       if ((item.at ?? 0) <= dismissedAt) continue;
+      if (sessionID && item.sessionID && item.sessionID !== sessionID) continue;
       if (latest === null || (item.at ?? 0) > (latest.at ?? 0)) latest = item;
     }
     return latest;
@@ -2337,7 +2338,7 @@ ${GUEST_UI_LOOK_CSS}`;
       return {
         records: mergeRecords(journals),
         status,
-        suggestion: pickSuggestion(suggestions, state.suggestionDismissedAt)
+        suggestion: pickSuggestion(suggestions, state.suggestionDismissedAt, state.sessionID)
       };
     }
     async function refresh() {

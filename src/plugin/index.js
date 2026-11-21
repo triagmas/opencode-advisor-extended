@@ -402,6 +402,15 @@ export async function setup(ctx) {
     const model = modelRef(config);
     if (!model) return;
 
+    // Same rule as the review: a session from another folder is not ours.
+    try {
+      const info = await ctx.session.get({ sessionID });
+      const sessionDir = info?.location?.directory;
+      if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
+    } catch {
+      return;
+    }
+
     let raw;
     try {
       raw = await ctx.session.context({ sessionID });

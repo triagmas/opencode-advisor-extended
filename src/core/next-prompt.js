@@ -65,5 +65,9 @@ export function parseSuggestion(text, maxChars = NEXT_PROMPT_MAX_CHARS) {
     Math.max(NEXT_PROMPT_LIMITS.min, Number(maxChars) || NEXT_PROMPT_MAX_CHARS),
   );
   const chars = [...line];
-  return chars.length > limit ? chars.slice(0, limit).join("") : line;
+  if (chars.length <= limit) return line;
+  // Cut at a word boundary when there is one, so the offer never ends mid-word.
+  const cut = chars.slice(0, limit).join("");
+  const space = cut.lastIndexOf(" ");
+  return (space > limit * 0.6 ? cut.slice(0, space) : cut).trim();
 }

@@ -19,11 +19,12 @@ export function latestForSession(records, sessionID) {
 }
 
 /** Newest suggestion the person has not dismissed yet. */
-export function pickSuggestion(suggestions, dismissedAt = 0) {
+export function pickSuggestion(suggestions, dismissedAt = 0, sessionID = null) {
   let latest = null
   for (const item of Array.isArray(suggestions) ? suggestions : []) {
     if (!item || typeof item.text !== 'string' || item.text.trim() === '') continue
     if ((item.at ?? 0) <= dismissedAt) continue
+    if (sessionID && item.sessionID && item.sessionID !== sessionID) continue
     if (latest === null || (item.at ?? 0) > (latest.at ?? 0)) latest = item
   }
   return latest
@@ -181,7 +182,7 @@ function boot() {
     return {
       records: mergeRecords(journals),
       status,
-      suggestion: pickSuggestion(suggestions, state.suggestionDismissedAt),
+      suggestion: pickSuggestion(suggestions, state.suggestionDismissedAt, state.sessionID),
     }
   }
 

@@ -219,7 +219,10 @@ function parseSuggestion(text2, maxChars = NEXT_PROMPT_MAX_CHARS) {
     Math.max(NEXT_PROMPT_LIMITS.min, Number(maxChars) || NEXT_PROMPT_MAX_CHARS)
   );
   const chars = [...line];
-  return chars.length > limit ? chars.slice(0, limit).join("") : line;
+  if (chars.length <= limit) return line;
+  const cut = chars.slice(0, limit).join("");
+  const space = cut.lastIndexOf(" ");
+  return (space > limit * 0.6 ? cut.slice(0, space) : cut).trim();
 }
 
 // src/core/limits.js
@@ -831,6 +834,13 @@ async function setup(ctx) {
     if (Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS) return;
     const model = modelRef(config);
     if (!model) return;
+    try {
+      const info = await ctx.session.get({ sessionID });
+      const sessionDir = info?.location?.directory;
+      if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
+    } catch {
+      return;
+    }
     let raw2;
     try {
       raw2 = await ctx.session.context({ sessionID });

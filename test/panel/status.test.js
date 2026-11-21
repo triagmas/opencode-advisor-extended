@@ -14,3 +14,9 @@ test('предложение берётся последнее и не возв�
   assert.equal(pickSuggestion(items, 5), null)
   assert.equal(pickSuggestion(items, 4)?.text, 'новое')
 })
+
+test('предложение чужой сессии не показывается', () => {
+  const items = [{ at: 9, text: 'чужое', sessionID: 'other' }, { at: 5, text: 'своё', sessionID: 'mine' }]
+  assert.equal(pickSuggestion(items, 0, 'mine')?.text, 'своё')
+  assert.equal(pickSuggestion(items, 0, 'none'), null)
+})

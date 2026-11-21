@@ -31,3 +31,12 @@ test('промпт требует JSON и содержит ходы', () => {
   assert.match(prompt, /suggestion/)
   assert.match(prompt, /человек: привет/)
 })
+
+test('обрезка по границе слова, а не посреди', () => {
+  const text = 'Проверь сборку и запусти все тесты в проекте, затем покажи отчёт по покрытию'
+  const cut = parseSuggestion(text, 20)
+  assert.ok(!/\s$/.test(cut))
+  assert.ok(cut.length <= 50, 'нижняя граница диапазона — 50')
+  assert.ok(text.startsWith(cut), 'cut keeps the beginning')
+  assert.ok(text[cut.length] === undefined || text[cut.length] === ' ', 'граница по пробелу')
+})
