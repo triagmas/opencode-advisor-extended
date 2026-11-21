@@ -184,7 +184,9 @@ function buildSettings() {
 
 mountButton(settingsActions, {
   label: 'Сохранить',
-  variant: 'primary',
+  // 'default' is the SDK's filled, primary-looking button; 'primary' is not a
+  // ButtonVariant and renders as unstyled text.
+  variant: 'default',
   onClick: () => {
     void saveSettings()
   },

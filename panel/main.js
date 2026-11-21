@@ -2891,7 +2891,9 @@ ${GUEST_UI_LOOK_CSS}`;
   }
   mountButton(settingsActions, {
     label: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C",
-    variant: "primary",
+    // 'default' is the SDK's filled, primary-looking button; 'primary' is not a
+    // ButtonVariant and renders as unstyled text.
+    variant: "default",
     onClick: () => {
       void saveSettings();
     }

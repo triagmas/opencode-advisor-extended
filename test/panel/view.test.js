@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { settingsFormValues } from '../../src/panel/view.js'
 import { buildJournalView, mergeRecords, connectionState } from '../../src/panel/view.js'
 
@@ -37,4 +38,14 @@ test('поля настроек показывают дефолты и сохр�
   })
   assert.equal(settingsFormValues({ immuneTurns: 0 }, null, defaults).immuneTurns, '0')
   assert.equal(settingsFormValues({}, { maxDeltaMessages: 5 }, defaults).maxDeltaMessages, '5')
+})
+
+test('варианты кнопок панели есть в SDK', () => {
+  const source = readFileSync(new URL('../../src/panel/main.js', import.meta.url), 'utf8')
+  const allowed = new Set(['default', 'secondary', 'outline', 'ghost', 'destructive'])
+  const used = [...source.matchAll(/variant:\s*'([a-z]+)'/g)].map((match) => match[1])
+  assert.ok(used.length > 0, 'panel mounts buttons')
+  for (const variant of used) {
+    assert.ok(allowed.has(variant), `unknown ButtonVariant: ${variant}`)
+  }
 })
