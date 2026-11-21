@@ -13,7 +13,7 @@ import {
 
 import { DEFAULTS, normalizeConfig } from '../core/config.js'
 import { parseJournal } from '../core/journal-parse.js'
-import { buildJournalView, connectionState, mergeRecords, severityTone } from './view.js'
+import { buildJournalView, connectionState, mergeRecords, settingsFormValues, severityTone } from './view.js'
 
 const STATE_DIR = '~/.local/state/openchamber-advisor'
 const CONFIG_PATH = '~/.config/openchamber-advisor/config.json'
@@ -300,20 +300,36 @@ function renderSettings() {
 
   if (controls.mode === 'select') {
     const providerId = effective.provider || state.providers[0]?.id || ''
-    controls.providerSelect?.update({
-      value: providerId || null,
-      options: state.providers.map((provider) => ({ id: provider.id, label: provider.name })),
-    })
+    // A provider or model the plugin's snapshot does not list must still show
+    // what the config holds: it is in use, even if this server hides it.
+    const providerOptions = state.providers.map((provider) => ({ id: provider.id, label: provider.name }))
+    if (providerId && !providerOptions.some((option) => option.id === providerId)) {
+      providerOptions.unshift({ id: providerId, label: `${providerId} (текущий)` })
+    }
+    controls.providerSelect?.update({ value: providerId || null, options: providerOptions })
+
     const models = modelsOf(providerId)
+    const modelOptions = models.map((model) => ({ id: model.id, label: model.name }))
+    const modelId = effective.model || models[0]?.id || ''
+    if (modelId && !modelOptions.some((option) => option.id === modelId)) {
+      modelOptions.unshift({ id: modelId, label: `${modelId} (текущая)` })
+    }
     controls.modelSelect?.update({
-      value: effective.model || models[0]?.id || null,
-      options: models.map((model) => ({ id: model.id, label: model.name })),
-      disabled: models.length === 0,
+      value: modelId || null,
+      options: modelOptions,
+      disabled: modelOptions.length === 0,
     })
   } else {
-    for (const key of ['provider', 'model', 'immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+    for (const key of ['provider', 'model']) {
       fieldHandles[key]?.update({ value: String(effective[key] ?? '') })
     }
+  }
+
+  // Numeric limits are text fields in both modes; a missing key shows the
+  // plugin's own default instead of an empty box.
+  const form = settingsFormValues(state.config, state.draft, DEFAULTS)
+  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+    fieldHandles[key]?.update({ value: form[key] })
   }
   renderSettingsNotice()
 }

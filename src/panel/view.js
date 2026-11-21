@@ -43,3 +43,17 @@ export function severityTone(severity) {
   if (severity === 'concern') return 'warning'
   return 'neutral'
 }
+
+/**
+ * Text shown in the settings form. A key the config has never written shows the
+ * plugin's default, and an explicit 0 stays "0" — it is a value, not absence.
+ */
+export function settingsFormValues(config, draft, defaults) {
+  const effective = { ...config, ...(draft ?? {}) }
+  const values = {}
+  for (const key of Object.keys(defaults ?? {})) {
+    const value = effective[key]
+    values[key] = String(value ?? defaults[key] ?? '')
+  }
+  return values
+}

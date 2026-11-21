@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { settingsFormValues } from '../../src/panel/view.js'
 import { buildJournalView, mergeRecords, connectionState } from '../../src/panel/view.js'
 
 const rec = (sessionID, at, severity = 'nit') => ({ kind: 'advice', sessionID, at, severity, note: `${severity} @${at}` })
@@ -23,4 +24,17 @@ test('состояние связи по heartbeat', () => {
   assert.equal(connectionState(undefined, 10), 'missing')
   assert.equal(connectionState({ at: 0 }, 29_000), 'live')
   assert.equal(connectionState({ at: 0 }, 31_000), 'stale')
+})
+
+test('поля настроек показывают дефолты и сохраняют явный ноль', () => {
+  const defaults = { provider: '', model: '', immuneTurns: 3, maxDeltaMessages: 60, noteMaxChars: 768 }
+  assert.deepEqual(settingsFormValues({ provider: 'p', model: 'm' }, null, defaults), {
+    provider: 'p',
+    model: 'm',
+    immuneTurns: '3',
+    maxDeltaMessages: '60',
+    noteMaxChars: '768',
+  })
+  assert.equal(settingsFormValues({ immuneTurns: 0 }, null, defaults).immuneTurns, '0')
+  assert.equal(settingsFormValues({}, { maxDeltaMessages: 5 }, defaults).maxDeltaMessages, '5')
 })

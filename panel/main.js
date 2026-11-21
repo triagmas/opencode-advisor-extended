@@ -2736,6 +2736,15 @@ ${GUEST_UI_LOOK_CSS}`;
     if (severity === "concern") return "warning";
     return "neutral";
   }
+  function settingsFormValues(config, draft, defaults) {
+    const effective = { ...config, ...draft ?? {} };
+    const values = {};
+    for (const key of Object.keys(defaults ?? {})) {
+      const value = effective[key];
+      values[key] = String(value ?? defaults[key] ?? "");
+    }
+    return values;
+  }
 
   // src/panel/main.js
   var STATE_DIR = "~/.local/state/openchamber-advisor";
@@ -2975,20 +2984,30 @@ ${GUEST_UI_LOOK_CSS}`;
     controls.prose?.update({ checked: Boolean(effective.proseFallback) });
     if (controls.mode === "select") {
       const providerId = effective.provider || state.providers[0]?.id || "";
-      controls.providerSelect?.update({
-        value: providerId || null,
-        options: state.providers.map((provider) => ({ id: provider.id, label: provider.name }))
-      });
+      const providerOptions = state.providers.map((provider) => ({ id: provider.id, label: provider.name }));
+      if (providerId && !providerOptions.some((option) => option.id === providerId)) {
+        providerOptions.unshift({ id: providerId, label: `${providerId} (\u0442\u0435\u043A\u0443\u0449\u0438\u0439)` });
+      }
+      controls.providerSelect?.update({ value: providerId || null, options: providerOptions });
       const models = modelsOf(providerId);
+      const modelOptions = models.map((model) => ({ id: model.id, label: model.name }));
+      const modelId = effective.model || models[0]?.id || "";
+      if (modelId && !modelOptions.some((option) => option.id === modelId)) {
+        modelOptions.unshift({ id: modelId, label: `${modelId} (\u0442\u0435\u043A\u0443\u0449\u0430\u044F)` });
+      }
       controls.modelSelect?.update({
-        value: effective.model || models[0]?.id || null,
-        options: models.map((model) => ({ id: model.id, label: model.name })),
-        disabled: models.length === 0
+        value: modelId || null,
+        options: modelOptions,
+        disabled: modelOptions.length === 0
       });
     } else {
-      for (const key of ["provider", "model", "immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+      for (const key of ["provider", "model"]) {
         fieldHandles[key]?.update({ value: String(effective[key] ?? "") });
       }
+    }
+    const form = settingsFormValues(state.config, state.draft, DEFAULTS);
+    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+      fieldHandles[key]?.update({ value: form[key] });
     }
     renderSettingsNotice();
   }
