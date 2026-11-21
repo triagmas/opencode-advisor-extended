@@ -88,6 +88,11 @@ export async function setup(ctx) {
     return state
   }
 
+  const counters = emptyCounters()
+  let lastAdviceAt = null
+  let lastMs = null
+  let cooldownUntil = null
+
   let status = buildStatus({ ...emptyCounters(), startedAt: Date.now(), pluginVersion: PLUGIN_VERSION }, {}, Date.now())
   let queue = Promise.resolve()
 
