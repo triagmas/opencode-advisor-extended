@@ -43,7 +43,7 @@
 **Interfaces:**
 - Produces: `npm run build` → `panel/main.js` (IIFE) и `plugin/index.js`; `panel/index.html` грузит только `./main.js`.
 
-- [ ] **Step 1: Инициализировать репозиторий, создать GitHub и зависимости**
+- [x] **Step 1: Инициализировать репозиторий, создать GitHub и зависимости**
 
 ```bash
 cd "/mnt/f/_Project/Plugins/Opencode/opencode-advisor-extended"
@@ -57,7 +57,7 @@ npm i -D esbuild@0.28.2
 
 Expected: `gh repo view triagmas/opencode-advisor-extended` показывает репозиторий, `git remote -v` — origin.
 
-- [ ] **Step 2: Написать падающий тест манифеста**
+- [x] **Step 2: Написать падающий тест манифеста**
 
 ```js
 // test/manifest.test.js
@@ -91,12 +91,12 @@ test('файлы расширения на месте', () => {
 })
 ```
 
-- [ ] **Step 3: Запустить тест, убедиться что падает**
+- [x] **Step 3: Запустить тест, убедиться что падает**
 
 Run: `node --test test/manifest.test.js`
 Expected: FAIL — `oc` is undefined.
 
-- [ ] **Step 4: Создать package.json, скрипт сборки и пустые страницы**
+- [x] **Step 4: Создать package.json, скрипт сборки и пустые страницы**
 
 `package.json` держит `"type": "module"`, скрипты `build` (esbuild для панели и плагина), `test` (`node --test test`). Блок `openchamber` — ровно как в тесте; `statusSection: { entry: "status/index.html", title: "Advisor", height: 200 }`, `panel: { entry: "panel/index.html" }`, `icon: "sparkling"`.
 
@@ -106,12 +106,12 @@ Expected: FAIL — `oc` is undefined.
 
 `panel/index.html` и `status/index.html` — минимальный HTML с `<script src="./main.js"></script>`.
 
-- [ ] **Step 5: Собрать и прогнать тесты**
+- [x] **Step 5: Собрать и прогнать тесты**
 
 Run: `npm run build && node --test test/manifest.test.js`
 Expected: PASS, `panel/main.js` и `plugin/index.js` существуют.
 
-- [ ] **Step 6: Коммит**
+- [x] **Step 6: Коммит**
 
 ```bash
 git add -A && git commit -m "chore: scaffold extension package and build"
