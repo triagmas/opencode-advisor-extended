@@ -128,7 +128,7 @@ git add -A && git commit -m "chore: scaffold extension package and build"
 **Interfaces:**
 - Produces: `limitText(text: string, max: number): string`; `parseAdviceFrame(text: string): { severity: 'nit'|'concern'|'blocker', guidance: string } | null`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```js
 // test/core/limits.test.js
@@ -172,21 +172,21 @@ test('неизвестный уровень и мусор дают null', () => 
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/core`
 Expected: FAIL — модулей нет.
 
-- [ ] **Step 3: Реализовать `limitText` и `parseAdviceFrame`**
+- [x] **Step 3: Реализовать `limitText` и `parseAdviceFrame`**
 
 `limitText`: если `text.length <= max` — вернуть как есть; иначе отрезать `max - 1` символов, откатиться до последнего пробела (если он дальше половины), обрезать хвост, добавить `…`. `parseAdviceFrame`: найти первый `{` и последний `}`, `JSON.parse`, проверить, что `severity` из трёх значений и `guidance` — непустая строка; иначе `null`.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `node --test test/core`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add src/core test/core && git commit -m "feat: text limit and advice frame parser"
