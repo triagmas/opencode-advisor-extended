@@ -27,7 +27,6 @@ const state = {
   allProjects: false,
   records: [],
   status: null,
-  statuses: [],
   config: { ...DEFAULTS },
   draft: null,
   message: null,
@@ -93,17 +92,14 @@ const settingsActions = element('div', 'adv-actions')
 const settingsNotice = element('div')
 settingsPane.append(settingsFields, settingsActions, settingsNotice)
 
-const fieldHosts = {}
 const fieldHandles = {}
 
-function addField(key, label, options = {}) {
+function addField(key, label) {
   const hostNode = element('div', 'adv-field')
   settingsFields.append(hostNode)
-  fieldHosts[key] = hostNode
   fieldHandles[key] = mountTextField(hostNode, {
     label,
     value: '',
-    multiline: options.multiline,
     onChange: (value) => {
       state.draft = { ...(state.draft ?? {}), [key]: value }
       state.message = null
@@ -112,11 +108,11 @@ function addField(key, label, options = {}) {
   })
 }
 
-addField('provider', 'Provider', {})
-addField('model', 'Model', {})
-addField('immuneTurns', 'Пропускать шагов после совета', {})
-addField('maxDeltaMessages', 'Сообщений в обзоре (0 — без ограничения)', {})
-addField('noteMaxChars', 'Длина совета, знаков', {})
+addField('provider', 'Provider')
+addField('model', 'Model')
+addField('immuneTurns', 'Пропускать шагов после совета')
+addField('maxDeltaMessages', 'Сообщений в обзоре (0 — без ограничения)')
+addField('noteMaxChars', 'Длина совета, знаков')
 
 const enabledSwitch = mountSwitch(settingsFields, {
   label: 'Ревьюер включён',
@@ -167,14 +163,6 @@ const tabs = mountTabs(tabsHost, {
 
 // --- rendering ------------------------------------------------------------
 
-let rowsSignature = ''
-
-function severityToneOf(severity) {
-  if (severity === 'blocker') return 'error'
-  if (severity === 'concern') return 'warning'
-  return 'neutral'
-}
-
 function renderJournal() {
   const view = buildJournalView({
     records: state.records,
@@ -182,13 +170,9 @@ function renderJournal() {
     allProjects: state.allProjects,
   })
 
-  const signature = JSON.stringify(view.rows.map((row) => [row.at, row.severity, row.note]))
-  if (signature === rowsSignature) return
-  rowsSignature = signature
-
   journalRows.replaceChildren()
 
-  if (state.status === null && state.records.length === 0) {
+  if (view.rows.length === 0 && connectionState(state.status, Date.now()) !== 'live') {
     mountEmpty(journalRows, {
       title: 'Плагин не запущен',
       body: 'Нет heartbeat. Проверьте, что OpenCode работает и расширение включено.',
@@ -205,7 +189,7 @@ function renderJournal() {
     const row = element('div', 'adv-row')
     const rowHead = element('div', 'adv-row-head')
     const badgeHost = element('span')
-    mountBadge(badgeHost, { label: record.severity ?? 'nit', tone: severityToneOf(record.severity) })
+    mountBadge(badgeHost, { label: record.severity ?? 'nit', tone: severityTone(record.severity) })
     rowHead.append(badgeHost, element('span', 'adv-time', formatTime(record.at)))
     row.append(rowHead, element('p', 'adv-note', record.note ?? ''))
 
@@ -236,12 +220,6 @@ function formatTime(at) {
   return new Date(at).toLocaleTimeString()
 }
 
-function valueFor(config, key) {
-  if (key === 'enabled' || key === 'proseFallback') return Boolean(config[key])
-  if (key === 'provider' || key === 'model') return String(config[key] ?? '')
-  return String(config[key] ?? '')
-}
-
 function settingsEditing() {
   const active = document.activeElement
   if (!active || !settingsPane.contains(active)) return false
@@ -257,7 +235,7 @@ function renderSettings() {
   enabledSwitch.update({ checked: Boolean(effective.enabled) })
   proseSwitch.update({ checked: Boolean(effective.proseFallback) })
   for (const key of ['provider', 'model', 'immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
-    fieldHandles[key].update({ value: valueFor(effective, key) })
+    fieldHandles[key].update({ value: String(effective[key] ?? '') })
   }
   renderSettingsNotice()
 }
@@ -292,8 +270,8 @@ function renderStatus() {
     })
   }
 
-  if (status?.blocked === 'model-missing') {
-    mountBanner(pane(statusPane), {
+  if (status?.reason === 'model-missing') {
+    mountBanner(statusPane, {
       tone: 'info',
       title: 'disabled-with-reason: model-missing',
       body: 'Задайте provider и model на вкладке «Настройки» — до этого ревьюер молчит.',
@@ -308,7 +286,7 @@ function renderStatus() {
     ['Модель', status?.model ?? 'нет (model-missing)'],
     ['Включён', status ? (status.enabled ? 'да' : 'нет') : '—'],
     ['Вызовов', status?.calls ?? 0],
-    ['Дропов', status ? `${status.drops.empty} пусто · ${status.drops.unparsed} разбор · ${status.drops.error} ошибки` : '—'],
+    ['Дропов', status ? `${status.drops?.empty ?? 0} пусто · ${status.drops?.unparsed ?? 0} разбор · ${status.drops?.error ?? 0} ошибки` : '—'],
     ['Последний совет', latest ? formatTime(latest.at) : 'советов ещё не было'],
     ['Средняя задержка', average === null ? '—' : `${average} мс`],
   ]
@@ -318,12 +296,6 @@ function renderStatus() {
     row.append(element('span', 'adv-status-label', label), element('span', 'adv-status-value', String(value)))
     statusPane.append(row)
   }
-}
-
-function pane(parent) {
-  const wrapper = element('div', 'adv-pane')
-  parent.append(wrapper)
-  return wrapper
 }
 
 function latestAdvice() {
@@ -386,7 +358,6 @@ async function updateState() {
   }
 
   state.records = mergeRecords(journals)
-  state.statuses = statuses
   state.status = statuses.reduce((best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best), null)
 }
 
@@ -406,8 +377,16 @@ async function refresh() {
   render()
 }
 
+function settingsValues() {
+  const merged = { ...state.config, ...(state.draft ?? {}) }
+  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+    merged[key] = Number.parseInt(String(merged[key]), 10)
+  }
+  return merged
+}
+
 async function saveSettings() {
-  const { config, errors } = normalizeConfig({ ...state.config, ...(state.draft ?? {}) })
+  const { config, errors } = normalizeConfig(settingsValues())
   try {
     await host.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
     state.config = config

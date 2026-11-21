@@ -736,7 +736,7 @@ git add -A && git commit -m "feat: advisor panel with journal, settings and stat
 - Consumes: Task 9 `connectionState`, Task 3 `parseJournal`.
 - Produces: `latestForSession(records, sessionID): object | null`.
 
-- [ ] **Step 1: Написать падающий тест**
+- [x] **Step 1: Написать падающий тест**
 
 ```js
 // test/panel/status.test.js
@@ -751,21 +751,21 @@ test('берёт последний совет сессии', () => {
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/panel/status.test.js`
 Expected: FAIL — модуля нет.
 
-- [ ] **Step 3: Реализовать страницу**
+- [x] **Step 3: Реализовать страницу**
 
 `latestForSession` — фильтр `kind === 'advice'` и `sessionID`, максимум по `at`. Страница `src/panel/status.js`: те же чтения раз в 3 000 мс, `setHeight(200)` по `ResizeObserver`, строка уровня, кнопка «в инпут», счётчик за сессию, плашка «ревьюер выключен»/«не запущен». Сборка добавляет второй вход → `status/main.js`.
 
-- [ ] **Step 4: Собрать и прогнать тесты**
+- [x] **Step 4: Собрать и прогнать тесты**
 
 Run: `npm run build && node --test test`
 Expected: PASS; `status/main.js` существует.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add -A && git commit -m "feat: work status section"

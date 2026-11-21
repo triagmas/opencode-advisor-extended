@@ -2482,6 +2482,11 @@ ${GUEST_UI_LOOK_CSS}`;
     if (!status) return "missing";
     return isStale(status, now) ? "stale" : "live";
   }
+  function severityTone(severity) {
+    if (severity === "blocker") return "error";
+    if (severity === "concern") return "warning";
+    return "neutral";
+  }
 
   // src/panel/main.js
   var STATE_DIR = "~/.local/state/openchamber-advisor";
@@ -2495,7 +2500,6 @@ ${GUEST_UI_LOOK_CSS}`;
     allProjects: false,
     records: [],
     status: null,
-    statuses: [],
     config: { ...DEFAULTS },
     draft: null,
     message: null
@@ -2549,16 +2553,13 @@ ${GUEST_UI_LOOK_CSS}`;
   var settingsActions = element("div", "adv-actions");
   var settingsNotice = element("div");
   settingsPane.append(settingsFields, settingsActions, settingsNotice);
-  var fieldHosts = {};
   var fieldHandles = {};
-  function addField(key, label, options = {}) {
+  function addField(key, label) {
     const hostNode = element("div", "adv-field");
     settingsFields.append(hostNode);
-    fieldHosts[key] = hostNode;
     fieldHandles[key] = mountTextField(hostNode, {
       label,
       value: "",
-      multiline: options.multiline,
       onChange: (value) => {
         state.draft = { ...state.draft ?? {}, [key]: value };
         state.message = null;
@@ -2566,11 +2567,11 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     });
   }
-  addField("provider", "Provider", {});
-  addField("model", "Model", {});
-  addField("immuneTurns", "\u041F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432 \u043F\u043E\u0441\u043B\u0435 \u0441\u043E\u0432\u0435\u0442\u0430", {});
-  addField("maxDeltaMessages", "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u0432 \u043E\u0431\u0437\u043E\u0440\u0435 (0 \u2014 \u0431\u0435\u0437 \u043E\u0433\u0440\u0430\u043D\u0438\u0447\u0435\u043D\u0438\u044F)", {});
-  addField("noteMaxChars", "\u0414\u043B\u0438\u043D\u0430 \u0441\u043E\u0432\u0435\u0442\u0430, \u0437\u043D\u0430\u043A\u043E\u0432", {});
+  addField("provider", "Provider");
+  addField("model", "Model");
+  addField("immuneTurns", "\u041F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432 \u043F\u043E\u0441\u043B\u0435 \u0441\u043E\u0432\u0435\u0442\u0430");
+  addField("maxDeltaMessages", "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u0432 \u043E\u0431\u0437\u043E\u0440\u0435 (0 \u2014 \u0431\u0435\u0437 \u043E\u0433\u0440\u0430\u043D\u0438\u0447\u0435\u043D\u0438\u044F)");
+  addField("noteMaxChars", "\u0414\u043B\u0438\u043D\u0430 \u0441\u043E\u0432\u0435\u0442\u0430, \u0437\u043D\u0430\u043A\u043E\u0432");
   var enabledSwitch = mountSwitch(settingsFields, {
     label: "\u0420\u0435\u0432\u044C\u044E\u0435\u0440 \u0432\u043A\u043B\u044E\u0447\u0451\u043D",
     checked: DEFAULTS.enabled,
@@ -2609,23 +2610,14 @@ ${GUEST_UI_LOOK_CSS}`;
       render();
     }
   });
-  var rowsSignature = "";
-  function severityToneOf(severity) {
-    if (severity === "blocker") return "error";
-    if (severity === "concern") return "warning";
-    return "neutral";
-  }
   function renderJournal() {
     const view = buildJournalView({
       records: state.records,
       sessionID: state.sessionID,
       allProjects: state.allProjects
     });
-    const signature = JSON.stringify(view.rows.map((row) => [row.at, row.severity, row.note]));
-    if (signature === rowsSignature) return;
-    rowsSignature = signature;
     journalRows.replaceChildren();
-    if (state.status === null && state.records.length === 0) {
+    if (view.rows.length === 0 && connectionState(state.status, Date.now()) !== "live") {
       mountEmpty(journalRows, {
         title: "\u041F\u043B\u0430\u0433\u0438\u043D \u043D\u0435 \u0437\u0430\u043F\u0443\u0449\u0435\u043D",
         body: "\u041D\u0435\u0442 heartbeat. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435, \u0447\u0442\u043E OpenCode \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0438 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u0438\u0435 \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u043E."
@@ -2640,7 +2632,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const row = element("div", "adv-row");
       const rowHead = element("div", "adv-row-head");
       const badgeHost = element("span");
-      mountBadge(badgeHost, { label: record.severity ?? "nit", tone: severityToneOf(record.severity) });
+      mountBadge(badgeHost, { label: record.severity ?? "nit", tone: severityTone(record.severity) });
       rowHead.append(badgeHost, element("span", "adv-time", formatTime(record.at)));
       row.append(rowHead, element("p", "adv-note", record.note ?? ""));
       const actions = element("div", "adv-actions");
@@ -2668,11 +2660,6 @@ ${GUEST_UI_LOOK_CSS}`;
     if (typeof at !== "number") return "\u2014";
     return new Date(at).toLocaleTimeString();
   }
-  function valueFor(config, key) {
-    if (key === "enabled" || key === "proseFallback") return Boolean(config[key]);
-    if (key === "provider" || key === "model") return String(config[key] ?? "");
-    return String(config[key] ?? "");
-  }
   function settingsEditing() {
     const active2 = document.activeElement;
     if (!active2 || !settingsPane.contains(active2)) return false;
@@ -2687,7 +2674,7 @@ ${GUEST_UI_LOOK_CSS}`;
     enabledSwitch.update({ checked: Boolean(effective.enabled) });
     proseSwitch.update({ checked: Boolean(effective.proseFallback) });
     for (const key of ["provider", "model", "immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
-      fieldHandles[key].update({ value: valueFor(effective, key) });
+      fieldHandles[key].update({ value: String(effective[key] ?? "") });
     }
     renderSettingsNotice();
   }
@@ -2718,8 +2705,8 @@ ${GUEST_UI_LOOK_CSS}`;
         body: "\u041F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0439 \u0441\u0438\u0433\u043D\u0430\u043B \u043F\u043B\u0430\u0433\u0438\u043D\u0430 \u0441\u0442\u0430\u0440\u0448\u0435 30 \u0441\u0435\u043A\u0443\u043D\u0434."
       });
     }
-    if (status?.blocked === "model-missing") {
-      mountBanner(pane(statusPane), {
+    if (status?.reason === "model-missing") {
+      mountBanner(statusPane, {
         tone: "info",
         title: "disabled-with-reason: model-missing",
         body: "\u0417\u0430\u0434\u0430\u0439\u0442\u0435 provider \u0438 model \u043D\u0430 \u0432\u043A\u043B\u0430\u0434\u043A\u0435 \xAB\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438\xBB \u2014 \u0434\u043E \u044D\u0442\u043E\u0433\u043E \u0440\u0435\u0432\u044C\u044E\u0435\u0440 \u043C\u043E\u043B\u0447\u0438\u0442."
@@ -2733,7 +2720,7 @@ ${GUEST_UI_LOOK_CSS}`;
       ["\u041C\u043E\u0434\u0435\u043B\u044C", status?.model ?? "\u043D\u0435\u0442 (model-missing)"],
       ["\u0412\u043A\u043B\u044E\u0447\u0451\u043D", status ? status.enabled ? "\u0434\u0430" : "\u043D\u0435\u0442" : "\u2014"],
       ["\u0412\u044B\u0437\u043E\u0432\u043E\u0432", status?.calls ?? 0],
-      ["\u0414\u0440\u043E\u043F\u043E\u0432", status ? `${status.drops.empty} \u043F\u0443\u0441\u0442\u043E \xB7 ${status.drops.unparsed} \u0440\u0430\u0437\u0431\u043E\u0440 \xB7 ${status.drops.error} \u043E\u0448\u0438\u0431\u043A\u0438` : "\u2014"],
+      ["\u0414\u0440\u043E\u043F\u043E\u0432", status ? `${status.drops?.empty ?? 0} \u043F\u0443\u0441\u0442\u043E \xB7 ${status.drops?.unparsed ?? 0} \u0440\u0430\u0437\u0431\u043E\u0440 \xB7 ${status.drops?.error ?? 0} \u043E\u0448\u0438\u0431\u043A\u0438` : "\u2014"],
       ["\u041F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0439 \u0441\u043E\u0432\u0435\u0442", latest ? formatTime(latest.at) : "\u0441\u043E\u0432\u0435\u0442\u043E\u0432 \u0435\u0449\u0451 \u043D\u0435 \u0431\u044B\u043B\u043E"],
       ["\u0421\u0440\u0435\u0434\u043D\u044F\u044F \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430", average === null ? "\u2014" : `${average} \u043C\u0441`]
     ];
@@ -2742,11 +2729,6 @@ ${GUEST_UI_LOOK_CSS}`;
       row.append(element("span", "adv-status-label", label), element("span", "adv-status-value", String(value)));
       statusPane.append(row);
     }
-  }
-  function pane(parent) {
-    const wrapper = element("div", "adv-pane");
-    parent.append(wrapper);
-    return wrapper;
   }
   function latestAdvice() {
     const advices = state.records.filter((record) => record.kind === "advice");
@@ -2798,7 +2780,6 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     }
     state.records = mergeRecords(journals);
-    state.statuses = statuses;
     state.status = statuses.reduce((best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best, null);
   }
   async function updateConfig() {
@@ -2815,8 +2796,15 @@ ${GUEST_UI_LOOK_CSS}`;
     await updateConfig();
     render();
   }
+  function settingsValues() {
+    const merged = { ...state.config, ...state.draft ?? {} };
+    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+      merged[key] = Number.parseInt(String(merged[key]), 10);
+    }
+    return merged;
+  }
   async function saveSettings() {
-    const { config, errors } = normalizeConfig({ ...state.config, ...state.draft ?? {} });
+    const { config, errors } = normalizeConfig(settingsValues());
     try {
       await host.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
       state.config = config;
