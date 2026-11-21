@@ -159,7 +159,8 @@ function boot() {
   if (typeof ResizeObserver === 'function') {
     const observer = new ResizeObserver(() => {
       const height = Math.ceil(root.getBoundingClientRect().height)
-      if (height > 0) void host.setHeight(height).catch(() => {})
+      // The section is declared as 200 px: stay there until the content needs more.
+      void host.setHeight(Math.min(480, Math.max(200, height))).catch(() => {})
     })
     observer.observe(root)
   }

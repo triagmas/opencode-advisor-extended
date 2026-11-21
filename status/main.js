@@ -2312,7 +2312,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (typeof ResizeObserver === "function") {
       const observer = new ResizeObserver(() => {
         const height = Math.ceil(root.getBoundingClientRect().height);
-        if (height > 0) void host.setHeight(height).catch(() => {
+        void host.setHeight(Math.min(480, Math.max(200, height))).catch(() => {
         });
       });
       observer.observe(root);
