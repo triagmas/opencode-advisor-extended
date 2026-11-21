@@ -130,3 +130,47 @@ test("proseFallback доставляет прозу как nit", async () => {
   assert.equal(r.severity, "nit");
   assert.match(ctx.calls.entry[0].value, /отдельную функцию/);
 });
+
+test("две сессии одновременно: советы не перепутываются", async () => {
+  let arrived = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const calls = { synthetic: [], entry: [] };
+  const ctx = {
+    session: {
+      context: async ({ sessionID }) => [
+        { id: `${sessionID}-1`, role: "assistant", text: `шаг ${sessionID}` },
+      ],
+      synthetic: async (x) => calls.synthetic.push(x),
+      instructions: {
+        entry: {
+          put: async (x) => calls.entry.push(x),
+          remove: async () => {},
+        },
+      },
+    },
+    experimental: {
+      generate: {
+        text: async ({ prompt }) => {
+          arrived += 1;
+          if (arrived === 2) release();
+          await gate;
+          const who = prompt.includes("шаг b") ? "b" : "a";
+          return { text: `{"severity":"concern","guidance":"для ${who}"}` };
+        },
+      },
+    },
+  };
+  const state = () => ({ lastSeenID: null, turns: 0 });
+  const results = await Promise.all([
+    runReview({ ctx, config, sessionID: "a", state: state(), now: 1 }),
+    runReview({ ctx, config, sessionID: "b", state: state(), now: 2 }),
+  ]);
+  assert.deepEqual(results.map((r) => r.kind), ["delivered", "delivered"]);
+  const byId = new Map(calls.synthetic.map((x) => [x.sessionID, x.text]));
+  assert.match(byId.get("a"), /для a/);
+  assert.match(byId.get("b"), /для b/);
+  assert.deepEqual(calls.entry.map((x) => x.sessionID).sort(), ["a", "b"]);
+});
