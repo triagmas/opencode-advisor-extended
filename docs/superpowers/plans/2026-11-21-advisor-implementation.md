@@ -207,7 +207,7 @@ git add src/core test/core && git commit -m "feat: text limit and advice frame p
   - `parseJournal(text: string): object[]` — пропускает битые строки;
   - `ROTATE_BYTES = 1_000_000`, `ROTATE_LINES = 5000`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```js
 // test/core/journal.test.js
@@ -249,21 +249,21 @@ test('ротация по числу строк оставляет бэкап .1
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/core/journal.test.js`
 Expected: FAIL — модуля нет.
 
-- [ ] **Step 3: Реализовать модуль**
+- [x] **Step 3: Реализовать модуль**
 
 `journalFileName` — `createHash('sha256').update(locationDir).digest('hex').slice(0, 8)`. `appendRecord` — прочитать `stat` файла; если `size + newLine > ROTATE_BYTES` или строк `>= ROTATE_LINES`, `rename` в `.1` (перезаписывая старый бэкап), затем `appendFile` одной строкой `JSON.stringify(record) + '\n'`. `parseJournal` — split по `\n`, `JSON.parse` в try/catch, пропуск пустых и битых.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `node --test test/core/journal.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add src/core/journal.js test/core/journal.test.js && git commit -m "feat: append-only journal with rotation"
