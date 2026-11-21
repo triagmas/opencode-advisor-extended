@@ -168,6 +168,7 @@ function buildProvidersSnapshot(models, providers, now = Date.now()) {
 }
 
 // src/core/next-block.js
+var NEXT_DISPLAYS = ["card", "line", "off"];
 var NEXT_BLOCK_INSTRUCTION = [
   "Advisor next-step card: end every reply with one fenced openui-lang block",
   "that draws only the card, exactly like this:",
@@ -176,8 +177,22 @@ var NEXT_BLOCK_INSTRUCTION = [
   "```",
   "Put it last and do not describe it in text."
 ].join("\n");
+var NEXT_LINE_INSTRUCTION = [
+  "Advisor line: when this request carries an advisor note, end every reply",
+  "with that note repeated on its own line, unchanged. It already starts with",
+  '"Advisor \xB7 ". Add nothing when there is no note, and never invent one.'
+].join("\n");
 function nextBlockInstruction(enabled) {
   return enabled ? NEXT_BLOCK_INSTRUCTION : "";
+}
+function nextLineInstruction(enabled) {
+  return enabled ? NEXT_LINE_INSTRUCTION : "";
+}
+function normalizeNextDisplay(value) {
+  return NEXT_DISPLAYS.includes(value) ? value : "card";
+}
+function formatNote(severity, note, display = "card") {
+  return display === "line" ? `Advisor \xB7 ${severity}: ${note}` : `[advisor:${severity}] ${note}`;
 }
 
 // src/core/next-prompt.js
@@ -291,7 +306,13 @@ import { createHash as createHash2 } from "node:crypto";
 
 // src/core/status-format.js
 function emptyCounters() {
-  return { calls: 0, drops: { empty: 0, unparsed: 0, error: 0 } };
+  return {
+    calls: 0,
+    drops: { empty: 0, unparsed: 0, error: 0 },
+    // Separate on purpose: a silent card pipeline must not look like a silent
+    // reviewer. `calls` counts reviewer calls, `suggest.calls` prediction calls.
+    suggest: { calls: 0, empty: 0, error: 0 }
+  };
 }
 function buildStatus(prev = {}, patch = {}, now = Date.now()) {
   const base = { ...emptyCounters(), ...prev };
@@ -299,6 +320,7 @@ function buildStatus(prev = {}, patch = {}, now = Date.now()) {
     ...base,
     ...patch,
     drops: { ...base.drops, ...patch.drops ?? {} },
+    suggest: { ...base.suggest, ...patch.suggest ?? {} },
     at: now
   };
 }
@@ -464,6 +486,7 @@ async function runReview({
   config,
   sessionID,
   state,
+  display = "card",
   now = Date.now()
 }) {
   const model = modelRef(config);
@@ -523,7 +546,7 @@ ${buildReviewPrompt(transcript)}`;
     const guard = state.guard ??= createEmissionGuard();
     if (!guard.accept({ severity: frame.severity, note }))
       return { kind: "skipped", reason: "duplicate", ms };
-    const delivered = `[advisor:${frame.severity}] ${note}`;
+    const delivered = formatNote(frame.severity, note, display);
     try {
       if (frame.severity !== "nit") {
         await ctx.session.synthetic({
@@ -584,6 +607,7 @@ async function setup(ctx) {
   const configDir = options.configDir ?? join(home, ".config", "openchamber-advisor");
   const stateDir = options.stateDir ?? join(home, ".local", "state", "openchamber-advisor");
   const locationDir = resolve(String(ctx.location?.directory ?? process.cwd()));
+  const display = normalizeNextDisplay(options.nextDisplay);
   const configPath = join(configDir, "config.json");
   const statusPath = join(stateDir, statusFileName(locationDir));
   const journalPath = join(stateDir, journalFileName(locationDir));
@@ -728,7 +752,10 @@ async function setup(ctx) {
     const last = status.lastAdviceAt ? new Date(status.lastAdviceAt).toLocaleTimeString() : "\u0441\u043E\u0432\u0435\u0442\u043E\u0432 \u0435\u0449\u0451 \u043D\u0435 \u0431\u044B\u043B\u043E";
     const latency = typeof status.lastMs === "number" ? `${status.lastMs} \u043C\u0441` : "\u2014";
     const mute = session?.disabled ? "\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D\u0430" : session?.muted ? "\u043C\u043E\u043B\u0447\u0438\u0442 \u043F\u043E\u0441\u043B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438 \u043C\u043E\u0434\u0435\u043B\u0438" : "\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u0430";
-    return `\u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435: ${state}, ${mute}; \u043C\u043E\u0434\u0435\u043B\u044C: ${model}; \u0432\u044B\u0437\u043E\u0432\u043E\u0432: ${status.calls}; \u0434\u0440\u043E\u043F\u043E\u0432: ${status.drops.empty + status.drops.unparsed + status.drops.error}; \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430: ${latency}; ${last}`;
+    const drop = status.drops.empty + status.drops.unparsed + status.drops.error;
+    const suggest = status.suggest ? `, \u043F\u043E\u0434\u0441\u043A\u0430\u0437\u043E\u043A: ${status.suggest.calls} (\u043F\u0443\u0441\u0442\u043E ${status.suggest.empty}, \u043E\u0448\u0438\u0431\u043E\u043A ${status.suggest.error})` : "";
+    const skip = status.lastSkip?.reason ? `; \u043F\u0440\u043E\u043F\u0443\u0441\u043A: ${status.lastSkip.reason}` : "";
+    return `\u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435: ${state}, ${mute}; \u043C\u043E\u0434\u0435\u043B\u044C: ${model}; \u0432\u044B\u0437\u043E\u0432\u043E\u0432: ${status.calls}; \u0434\u0440\u043E\u043F\u043E\u0432: ${drop}${suggest}${skip}; \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430: ${latency}; ${last}`;
   }
   async function runCommand({ sessionID, prompt }) {
     const parsed = parseCommand(prompt?.text ?? "");
@@ -817,9 +844,11 @@ async function setup(ctx) {
     }
   }
   async function onStepEnded(sessionID) {
+    const noteSkip = (reason) => flush({ lastSkip: { reason, at: Date.now() } }).catch(() => {
+    });
     const state = stateOf(sessionID);
-    if (state.inFlight) return;
-    if (!canReview(state, config, Date.now())) return;
+    if (state.inFlight) return noteSkip("in-flight");
+    if (!canReview(state, config, Date.now())) return noteSkip("gate");
     let info = null;
     try {
       info = await ctx.session.get({ sessionID });
@@ -827,18 +856,22 @@ async function setup(ctx) {
       info = null;
     }
     const sessionDir = info?.location?.directory;
-    if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
+    if (sessionDir && resolve(String(sessionDir)) !== locationDir)
+      return noteSkip("foreign");
     const archived = Boolean(info?.time?.archived ?? info?.archived);
-    if (info && !shouldReview({ parentID: info.parentID, archived })) return;
-    if (state.inFlight) return;
+    if (info && !shouldReview({ parentID: info.parentID, archived }))
+      return noteSkip("subagent");
+    if (state.inFlight) return noteSkip("in-flight");
     const started = Date.now();
     const result = await runReview({
       ctx,
       config,
       sessionID,
       state,
+      display,
       now: started
     });
+    if (result.kind === "skipped") void noteSkip(result.reason ?? "skipped");
     const patch = {};
     if (result.kind !== "skipped") {
       counters.calls += 1;
@@ -889,13 +922,20 @@ async function setup(ctx) {
       const info = await ctx.session.get({ sessionID });
       const sessionDir = info?.location?.directory;
       if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
+      const archived = Boolean(info?.time?.archived ?? info?.archived);
+      if (!shouldReview({ parentID: info?.parentID, archived })) return;
     } catch {
       return;
     }
+    const countSuggest = async (key) => {
+      counters.suggest[key] += 1;
+      await flush({ suggest: { ...counters.suggest } });
+    };
     let raw2;
     try {
       raw2 = await ctx.session.context({ sessionID });
     } catch {
+      await countSuggest("error");
       return;
     }
     const messages = (Array.isArray(raw2) ? raw2 : []).map((message) => ({
@@ -913,6 +953,7 @@ async function setup(ctx) {
     ).join("\n\n");
     state.suggesting = true;
     try {
+      await countSuggest("calls");
       const answer = await ctx.experimental.generate.text({
         model: { providerID: model.providerID, id: model.modelID },
         prompt: buildNextPromptPrompt(transcript)
@@ -922,6 +963,7 @@ async function setup(ctx) {
         config.nextPromptMaxChars
       );
       if (!text2) {
+        await countSuggest("empty");
         await unlink(suggestionPathFor(sessionID)).catch(() => {
         });
         return;
@@ -933,6 +975,7 @@ async function setup(ctx) {
         text: text2
       });
     } catch {
+      await countSuggest("error");
     } finally {
       state.suggesting = false;
       if (state.suggestQueued) {
@@ -967,14 +1010,21 @@ async function setup(ctx) {
   };
   let disposeContextHook = () => {
   };
+  const instructionFor = () => {
+    if (display === "card") return nextBlockInstruction(config.nextPrompt);
+    if (display === "line") return nextLineInstruction(config.enabled);
+    return "";
+  };
   try {
     const hook = await ctx.session.hook("context", (event) => {
-      if (!config.nextPrompt || !Array.isArray(event?.system)) return;
+      if (!Array.isArray(event?.system)) return;
       const sessionID = event.sessionID;
       if (!sessionID) return;
       rememberOwner(sessionID);
       if (ownedSessions.get(sessionID) === false) return;
-      event.system.push({ type: "text", text: nextBlockInstruction(true) });
+      const text2 = instructionFor();
+      if (!text2) return;
+      event.system.push({ type: "text", text: text2 });
     });
     if (typeof hook === "function") disposeContextHook = hook;
     else if (typeof hook?.dispose === "function")

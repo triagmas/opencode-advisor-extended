@@ -8,7 +8,11 @@ import { DEFAULTS, modelRef, normalizeConfig } from "../core/config.js";
 import { appendRecord } from "../core/journal.js";
 import { buildProvidersSnapshot } from "../core/providers.js";
 import { journalFileName, suggestionFileName } from "../core/journal-format.js";
-import { nextBlockInstruction } from "../core/next-block.js";
+import {
+  nextBlockInstruction,
+  nextLineInstruction,
+  normalizeNextDisplay,
+} from "../core/next-block.js";
 import {
   buildNextPromptPrompt,
   parseSuggestion,
@@ -69,6 +73,9 @@ export async function setup(ctx) {
   const stateDir =
     options.stateDir ?? join(home, ".local", "state", "openchamber-advisor");
   const locationDir = resolve(String(ctx.location?.directory ?? process.cwd()));
+  // How this client shows the advisor: OpenChamber draws the card, T3 Code has
+  // no block renderer and gets a ready-made line instead.
+  const display = normalizeNextDisplay(options.nextDisplay);
 
   const configPath = join(configDir, "config.json");
   const statusPath = join(stateDir, statusFileName(locationDir));
@@ -247,7 +254,15 @@ export async function setup(ctx) {
       : session?.muted
         ? "молчит после ошибки модели"
         : "сессия включена";
-    return `состояние: ${state}, ${mute}; модель: ${model}; вызовов: ${status.calls}; дропов: ${status.drops.empty + status.drops.unparsed + status.drops.error}; задержка: ${latency}; ${last}`;
+    const drop =
+      status.drops.empty + status.drops.unparsed + status.drops.error;
+    const suggest = status.suggest
+      ? `, подсказок: ${status.suggest.calls} (пусто ${status.suggest.empty}, ошибок ${status.suggest.error})`
+      : "";
+    const skip = status.lastSkip?.reason
+      ? `; пропуск: ${status.lastSkip.reason}`
+      : "";
+    return `состояние: ${state}, ${mute}; модель: ${model}; вызовов: ${status.calls}; дропов: ${drop}${suggest}${skip}; задержка: ${latency}; ${last}`;
   }
 
   async function runCommand({ sessionID, prompt }) {
@@ -346,9 +361,14 @@ export async function setup(ctx) {
   }
 
   async function onStepEnded(sessionID) {
+    // Why a step was not reviewed is the first thing a silent session is asked
+    // about; the heartbeat keeps the last reason so `/advisor status` can answer.
+    const noteSkip = (reason) =>
+      flush({ lastSkip: { reason, at: Date.now() } }).catch(() => {});
+
     const state = stateOf(sessionID);
-    if (state.inFlight) return;
-    if (!canReview(state, config, Date.now())) return;
+    if (state.inFlight) return noteSkip("in-flight");
+    if (!canReview(state, config, Date.now())) return noteSkip("gate");
 
     let info = null;
     try {
@@ -359,11 +379,13 @@ export async function setup(ctx) {
     // One server serves every location: never review a session that lives in a
     // different directory, or its advice lands in this one's context.
     const sessionDir = info?.location?.directory;
-    if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
+    if (sessionDir && resolve(String(sessionDir)) !== locationDir)
+      return noteSkip("foreign");
 
     const archived = Boolean(info?.time?.archived ?? info?.archived);
-    if (info && !shouldReview({ parentID: info.parentID, archived })) return;
-    if (state.inFlight) return;
+    if (info && !shouldReview({ parentID: info.parentID, archived }))
+      return noteSkip("subagent");
+    if (state.inFlight) return noteSkip("in-flight");
 
     const started = Date.now();
     const result = await runReview({
@@ -371,8 +393,10 @@ export async function setup(ctx) {
       config,
       sessionID,
       state,
+      display,
       now: started,
     });
+    if (result.kind === "skipped") void noteSkip(result.reason ?? "skipped");
 
     const patch = {};
     if (result.kind !== "skipped") {
@@ -434,19 +458,29 @@ export async function setup(ctx) {
     const model = modelRef(config);
     if (!model) return;
 
-    // Same rule as the review: a session from another folder is not ours.
+    // Same rule as the review: a session from another folder is not ours, and a
+    // subagent's next message is nobody's card. Its prediction would cost a call
+    // and land in a file no panel shows.
     try {
       const info = await ctx.session.get({ sessionID });
       const sessionDir = info?.location?.directory;
       if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
+      const archived = Boolean(info?.time?.archived ?? info?.archived);
+      if (!shouldReview({ parentID: info?.parentID, archived })) return;
     } catch {
       return;
     }
+
+    const countSuggest = async (key) => {
+      counters.suggest[key] += 1;
+      await flush({ suggest: { ...counters.suggest } });
+    };
 
     let raw;
     try {
       raw = await ctx.session.context({ sessionID });
     } catch {
+      await countSuggest("error");
       return;
     }
     const messages = (Array.isArray(raw) ? raw : [])
@@ -481,6 +515,7 @@ export async function setup(ctx) {
 
     state.suggesting = true;
     try {
+      await countSuggest("calls");
       const answer = await ctx.experimental.generate.text({
         model: { providerID: model.providerID, id: model.modelID },
         prompt: buildNextPromptPrompt(transcript),
@@ -493,6 +528,7 @@ export async function setup(ctx) {
         );
       if (!text) {
         // The request is satisfied (or needs the person): drop the stale offer.
+        await countSuggest("empty");
         await unlink(suggestionPathFor(sessionID)).catch(() => {});
         return;
       }
@@ -503,7 +539,9 @@ export async function setup(ctx) {
         text,
       });
     } catch {
-      // A suggestion is a nicety: a failed call leaves the previous one.
+      // A suggestion is a nicety: a failed call leaves the previous one, but the
+      // status still shows the failure instead of hiding it.
+      await countSuggest("error");
     } finally {
       state.suggesting = false;
       if (state.suggestQueued) {
@@ -547,14 +585,24 @@ export async function setup(ctx) {
       .catch(() => {});
   };
   let disposeContextHook = () => {};
+  // The card is an instruction the agent must repeat, so each display mode has
+  // its own text. `line` never asks for a block: it is the mode for clients
+  // that would print the block as raw code.
+  const instructionFor = () => {
+    if (display === "card") return nextBlockInstruction(config.nextPrompt);
+    if (display === "line") return nextLineInstruction(config.enabled);
+    return "";
+  };
   try {
     const hook = await ctx.session.hook("context", (event) => {
-      if (!config.nextPrompt || !Array.isArray(event?.system)) return;
+      if (!Array.isArray(event?.system)) return;
       const sessionID = event.sessionID;
       if (!sessionID) return;
       rememberOwner(sessionID);
       if (ownedSessions.get(sessionID) === false) return;
-      event.system.push({ type: "text", text: nextBlockInstruction(true) });
+      const text = instructionFor();
+      if (!text) return;
+      event.system.push({ type: "text", text });
     });
     if (typeof hook === "function") disposeContextHook = hook;
     else if (typeof hook?.dispose === "function")

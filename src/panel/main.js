@@ -13,7 +13,13 @@ import {
 
 import { DEFAULTS, normalizeConfig } from '../core/config.js'
 import { parseJournal } from '../core/journal-parse.js'
-import { buildJournalView, connectionState, mergeRecords, settingsFormValues, severityTone } from './view.js'
+import {
+  buildJournalView,
+  connectionState,
+  mergeRecords,
+  settingsFormValues,
+  severityTone,
+} from './view.js'
 
 const STATE_DIR = '~/.local/state/openchamber-advisor'
 const CONFIG_PATH = '~/.config/openchamber-advisor/config.json'
@@ -97,7 +103,14 @@ const settingsNotice = element('div')
 settingsPane.append(settingsFields, settingsActions, settingsNotice)
 
 const fieldHandles = {}
-const controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null, next: null }
+const controls = {
+  mode: null,
+  providerSelect: null,
+  modelSelect: null,
+  enabled: null,
+  prose: null,
+  next: null,
+}
 
 function setDraft(patch) {
   state.draft = { ...(state.draft ?? {}), ...patch }
@@ -135,7 +148,10 @@ function addModelPickers() {
       const models = modelsOf(id)
       const current = { ...state.config, ...(state.draft ?? {}) }
       const keep = models.some((model) => model.id === current.model)
-      setDraft({ provider: id, model: keep ? current.model : (models[0]?.id ?? '') })
+      setDraft({
+        provider: id,
+        model: keep ? current.model : (models[0]?.id ?? ''),
+      })
       renderSettings()
     },
   })
@@ -157,7 +173,13 @@ function buildSettings() {
   if (controls.mode === mode) return
   controls.mode = mode
   settingsFields.replaceChildren()
-  for (const key of ['provider', 'model', 'immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+  for (const key of [
+    'provider',
+    'model',
+    'immuneTurns',
+    'maxDeltaMessages',
+    'noteMaxChars',
+  ]) {
     delete fieldHandles[key]
   }
   if (mode === 'select') {
@@ -250,7 +272,10 @@ function renderJournal() {
   }
 
   if (view.empty) {
-    mountEmpty(journalRows, { title: 'Советов пока нет', body: 'Ревьюер оставит запись после шага агента.' })
+    mountEmpty(journalRows, {
+      title: 'Советов пока нет',
+      body: 'Ревьюер оставит запись после шага агента.',
+    })
     return
   }
 
@@ -258,8 +283,14 @@ function renderJournal() {
     const row = element('div', 'adv-row')
     const rowHead = element('div', 'adv-row-head')
     const badgeHost = element('span')
-    mountBadge(badgeHost, { label: record.severity ?? 'nit', tone: severityTone(record.severity) })
-    rowHead.append(badgeHost, element('span', 'adv-time', formatTime(record.at)))
+    mountBadge(badgeHost, {
+      label: record.severity ?? 'nit',
+      tone: severityTone(record.severity),
+    })
+    rowHead.append(
+      badgeHost,
+      element('span', 'adv-time', formatTime(record.at)),
+    )
     row.append(rowHead, element('p', 'adv-note', record.note ?? ''))
 
     const actions = element('div', 'adv-actions')
@@ -313,14 +344,29 @@ function renderSettings() {
     const providerId = effective.provider || state.providers[0]?.id || ''
     // A provider or model the plugin's snapshot does not list must still show
     // what the config holds: it is in use, even if this server hides it.
-    const providerOptions = state.providers.map((provider) => ({ id: provider.id, label: provider.name }))
-    if (providerId && !providerOptions.some((option) => option.id === providerId)) {
-      providerOptions.unshift({ id: providerId, label: `${providerId} (текущий)` })
+    const providerOptions = state.providers.map((provider) => ({
+      id: provider.id,
+      label: provider.name,
+    }))
+    if (
+      providerId &&
+      !providerOptions.some((option) => option.id === providerId)
+    ) {
+      providerOptions.unshift({
+        id: providerId,
+        label: `${providerId} (текущий)`,
+      })
     }
-    controls.providerSelect?.update({ value: providerId || null, options: providerOptions })
+    controls.providerSelect?.update({
+      value: providerId || null,
+      options: providerOptions,
+    })
 
     const models = modelsOf(providerId)
-    const modelOptions = models.map((model) => ({ id: model.id, label: model.name }))
+    const modelOptions = models.map((model) => ({
+      id: model.id,
+      label: model.name,
+    }))
     const modelId = effective.model || models[0]?.id || ''
     if (modelId && !modelOptions.some((option) => option.id === modelId)) {
       modelOptions.unshift({ id: modelId, label: `${modelId} (текущая)` })
@@ -339,7 +385,12 @@ function renderSettings() {
   // Numeric limits are text fields in both modes; a missing key shows the
   // plugin's own default instead of an empty box.
   const form = settingsFormValues(state.config, state.draft, DEFAULTS)
-  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars', 'nextPromptMaxChars']) {
+  for (const key of [
+    'immuneTurns',
+    'maxDeltaMessages',
+    'noteMaxChars',
+    'nextPromptMaxChars',
+  ]) {
     fieldHandles[key]?.update({ value: form[key] })
   }
   renderSettingsNotice()
@@ -348,11 +399,17 @@ function renderSettings() {
 function renderSettingsNotice() {
   settingsNotice.replaceChildren()
   if (state.message) {
-    mountBanner(settingsNotice, { tone: state.message.tone, title: state.message.text })
+    mountBanner(settingsNotice, {
+      tone: state.message.tone,
+      title: state.message.text,
+    })
     return
   }
   if (state.draft !== null) {
-    mountBanner(settingsNotice, { tone: 'info', title: 'Есть несохранённые изменения' })
+    mountBanner(settingsNotice, {
+      tone: 'info',
+      title: 'Есть несохранённые изменения',
+    })
   }
 }
 
@@ -391,25 +448,45 @@ function renderStatus() {
     ['Модель', status?.model ?? 'нет (model-missing)'],
     ['Включён', status ? (status.enabled ? 'да' : 'нет') : '—'],
     ['Вызовов', status?.calls ?? 0],
-    ['Дропов', status ? `${status.drops?.empty ?? 0} пусто · ${status.drops?.unparsed ?? 0} разбор · ${status.drops?.error ?? 0} ошибки` : '—'],
+    [
+      'Дропов',
+      status
+        ? `${status.drops?.empty ?? 0} пусто · ${status.drops?.unparsed ?? 0} разбор · ${status.drops?.error ?? 0} ошибки`
+        : '—',
+    ],
+    [
+      'Подсказок',
+      status?.suggest
+        ? `${status.suggest.calls ?? 0} · пусто ${status.suggest.empty ?? 0} · ошибок ${status.suggest.error ?? 0}`
+        : '—',
+    ],
     ['Последний совет', latest ? formatTime(latest.at) : 'советов ещё не было'],
     ['Средняя задержка', average === null ? '—' : `${average} мс`],
   ]
 
   for (const [label, value] of rows) {
     const row = element('div', 'adv-status-row')
-    row.append(element('span', 'adv-status-label', label), element('span', 'adv-status-value', String(value)))
+    row.append(
+      element('span', 'adv-status-label', label),
+      element('span', 'adv-status-value', String(value)),
+    )
     statusPane.append(row)
   }
 }
 
 function latestAdvice() {
   const advices = state.records.filter((record) => record.kind === 'advice')
-  return advices.reduce((best, record) => (!best || (record.at ?? 0) > (best.at ?? 0) ? record : best), null)
+  return advices.reduce(
+    (best, record) =>
+      !best || (record.at ?? 0) > (best.at ?? 0) ? record : best,
+    null,
+  )
 }
 
 function averageLatency() {
-  const values = state.records.map((record) => record.ms).filter((ms) => typeof ms === 'number' && ms >= 0)
+  const values = state.records
+    .map((record) => record.ms)
+    .filter((ms) => typeof ms === 'number' && ms >= 0)
   if (values.length === 0) return null
   return Math.round(values.reduce((sum, ms) => sum + ms, 0) / values.length)
 }
@@ -418,7 +495,12 @@ function renderHead() {
   headBadge.replaceChildren()
   const connection = connectionState(state.status, Date.now())
   mountBadge(headBadge, {
-    label: connection === 'live' ? 'live' : connection === 'stale' ? 'stale' : 'не запущен',
+    label:
+      connection === 'live'
+        ? 'live'
+        : connection === 'stale'
+          ? 'stale'
+          : 'не запущен',
     tone: connection === 'live' ? 'success' : 'warning',
   })
 }
@@ -431,7 +513,11 @@ function render() {
   // and the focused search field loses focus. Only switch on a tab change.
   if (renderedTab !== state.tab) {
     panes.replaceChildren(
-      state.tab === 'journal' ? journalPane : state.tab === 'settings' ? settingsPane : statusPane,
+      state.tab === 'journal'
+        ? journalPane
+        : state.tab === 'settings'
+          ? settingsPane
+          : statusPane,
     )
     renderedTab = state.tab
   }
@@ -460,7 +546,10 @@ async function updateState() {
       if (entry.name.startsWith('journal-') && entry.name.endsWith('.jsonl')) {
         const { content } = await host.readFile(path)
         journals.push(parseJournal(content))
-      } else if (entry.name.startsWith('status-') && entry.name.endsWith('.json')) {
+      } else if (
+        entry.name.startsWith('status-') &&
+        entry.name.endsWith('.json')
+      ) {
         const { content } = await host.readFile(path)
         statuses.push(JSON.parse(content))
       }
@@ -472,14 +561,19 @@ async function updateState() {
   try {
     const { content } = await host.readFile(PROVIDERS_PATH)
     const snapshot = JSON.parse(content)
-    state.providers = Array.isArray(snapshot?.providers) ? snapshot.providers : []
+    state.providers = Array.isArray(snapshot?.providers)
+      ? snapshot.providers
+      : []
   } catch {
     // No snapshot yet: keep free-text provider/model fields.
     state.providers = []
   }
 
   state.records = mergeRecords(journals)
-  state.status = statuses.reduce((best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best), null)
+  state.status = statuses.reduce(
+    (best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best),
+    null,
+  )
 }
 
 async function updateConfig() {
@@ -500,7 +594,12 @@ async function refresh() {
 
 function settingsValues() {
   const merged = { ...state.config, ...(state.draft ?? {}) }
-  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars', 'nextPromptMaxChars']) {
+  for (const key of [
+    'immuneTurns',
+    'maxDeltaMessages',
+    'noteMaxChars',
+    'nextPromptMaxChars',
+  ]) {
     merged[key] = Number.parseInt(String(merged[key]), 10)
   }
   return merged
@@ -513,10 +612,16 @@ async function saveSettings() {
     state.config = config
     state.draft = null
     state.message = errors.length
-      ? { tone: 'warning', text: `Сохранено, но модель не задана (${errors[0]}).` }
+      ? {
+          tone: 'warning',
+          text: `Сохранено, но модель не задана (${errors[0]}).`,
+        }
       : { tone: 'success', text: 'Настройки сохранены.' }
   } catch (error) {
-    state.message = { tone: 'error', text: `Не сохранено: ${error?.message ?? error}` }
+    state.message = {
+      tone: 'error',
+      text: `Не сохранено: ${error?.message ?? error}`,
+    }
   }
   renderSettings()
 }

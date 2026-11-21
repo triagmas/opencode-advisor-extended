@@ -158,3 +158,104 @@ test('две сессии одной папки: совет каждой сес�
 
   await dispose()
 })
+
+test('line-режим: заметка приходит готовой строкой', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
+  mkdirSync(join(dir, 'config'), { recursive: true })
+  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
+
+  const ctx = ctxFor(dir, '{"severity":"concern","guidance":"проверь границу"}')
+  ctx.options.nextDisplay = 'line'
+  const dispose = await plugin.setup(ctx)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+
+  assert.equal(ctx.entries.length, 1)
+  assert.equal(ctx.entries[0].value, 'Advisor · concern: проверь границу')
+  assert.equal(ctx.synthetics[0].text, 'Advisor · concern: проверь границу')
+
+  await dispose()
+})
+
+test('подсказка не пишется для субагента', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
+  mkdirSync(join(dir, 'config'), { recursive: true })
+  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
+
+  const ctx = ctxFor(dir, '{"suggestion":"продолжить"}')
+  ctx.event = {
+    subscribe: () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'session.execution.succeeded', data: { sessionID: 'child' } }
+      },
+    }),
+  }
+  ctx.session.get = async () => ({ parentID: 'root', location: { directory: '/proj' } })
+
+  const dispose = await plugin.setup(ctx)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+
+  const stateDir = join(dir, 'state')
+  assert.deepEqual(
+    readdirSync(stateDir).filter((name) => name.startsWith('suggestion-')),
+    [],
+  )
+  const statusFile = readdirSync(stateDir).find((name) => name.startsWith('status-'))
+  const status = JSON.parse(readFileSync(join(stateDir, statusFile), 'utf8'))
+  assert.equal(status.suggest.calls, 0)
+
+  await dispose()
+})
+
+test('подсказка корневой сессии считается в статусе', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
+  mkdirSync(join(dir, 'config'), { recursive: true })
+  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
+
+  const ctx = ctxFor(dir, '{"suggestion":"проверь тесты"}')
+  ctx.event = {
+    subscribe: () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'session.execution.succeeded', data: { sessionID: 's1' } }
+      },
+    }),
+  }
+  ctx.session.get = async () => ({ location: { directory: '/proj' } })
+  ctx.session.context = async () => [
+    { id: 'u1', type: 'user', text: 'сделай фикс' },
+    { id: 'a1', type: 'assistant', content: [{ type: 'text', text: 'сделал' }] },
+  ]
+
+  const dispose = await plugin.setup(ctx)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+
+  const stateDir = join(dir, 'state')
+  const suggestion = readdirSync(stateDir).find((name) => name.startsWith('suggestion-'))
+  assert.ok(suggestion, 'suggestion file written')
+  assert.equal(
+    JSON.parse(readFileSync(join(stateDir, suggestion), 'utf8')).text,
+    'проверь тесты',
+  )
+  const statusFile = readdirSync(stateDir).find((name) => name.startsWith('status-'))
+  const status = JSON.parse(readFileSync(join(stateDir, statusFile), 'utf8'))
+  assert.equal(status.suggest.calls, 1)
+
+  await dispose()
+})
+
+test('закрытый гейт оставляет причину пропуска в статусе', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
+  mkdirSync(join(dir, 'config'), { recursive: true })
+  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 3 }))
+
+  const ctx = ctxFor(dir, '{"severity":"concern","guidance":"совет"}')
+  const dispose = await plugin.setup(ctx)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+
+  const stateDir = join(dir, 'state')
+  const statusFile = readdirSync(stateDir).find((name) => name.startsWith('status-'))
+  const status = JSON.parse(readFileSync(join(stateDir, statusFile), 'utf8'))
+  assert.equal(status.calls, 0)
+  assert.equal(status.lastSkip.reason, 'gate')
+
+  await dispose()
+})

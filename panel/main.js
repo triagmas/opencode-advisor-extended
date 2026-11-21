@@ -2819,7 +2819,14 @@ ${GUEST_UI_LOOK_CSS}`;
   var settingsNotice = element("div");
   settingsPane.append(settingsFields, settingsActions, settingsNotice);
   var fieldHandles = {};
-  var controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null, next: null };
+  var controls = {
+    mode: null,
+    providerSelect: null,
+    modelSelect: null,
+    enabled: null,
+    prose: null,
+    next: null
+  };
   function setDraft(patch) {
     state.draft = { ...state.draft ?? {}, ...patch };
     state.message = null;
@@ -2852,7 +2859,10 @@ ${GUEST_UI_LOOK_CSS}`;
         const models = modelsOf(id);
         const current = { ...state.config, ...state.draft ?? {} };
         const keep = models.some((model) => model.id === current.model);
-        setDraft({ provider: id, model: keep ? current.model : models[0]?.id ?? "" });
+        setDraft({
+          provider: id,
+          model: keep ? current.model : models[0]?.id ?? ""
+        });
         renderSettings();
       }
     });
@@ -2871,7 +2881,13 @@ ${GUEST_UI_LOOK_CSS}`;
     if (controls.mode === mode) return;
     controls.mode = mode;
     settingsFields.replaceChildren();
-    for (const key of ["provider", "model", "immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+    for (const key of [
+      "provider",
+      "model",
+      "immuneTurns",
+      "maxDeltaMessages",
+      "noteMaxChars"
+    ]) {
       delete fieldHandles[key];
     }
     if (mode === "select") {
@@ -2945,15 +2961,24 @@ ${GUEST_UI_LOOK_CSS}`;
       return;
     }
     if (view.empty) {
-      mountEmpty(journalRows, { title: "\u0421\u043E\u0432\u0435\u0442\u043E\u0432 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442", body: "\u0420\u0435\u0432\u044C\u044E\u0435\u0440 \u043E\u0441\u0442\u0430\u0432\u0438\u0442 \u0437\u0430\u043F\u0438\u0441\u044C \u043F\u043E\u0441\u043B\u0435 \u0448\u0430\u0433\u0430 \u0430\u0433\u0435\u043D\u0442\u0430." });
+      mountEmpty(journalRows, {
+        title: "\u0421\u043E\u0432\u0435\u0442\u043E\u0432 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442",
+        body: "\u0420\u0435\u0432\u044C\u044E\u0435\u0440 \u043E\u0441\u0442\u0430\u0432\u0438\u0442 \u0437\u0430\u043F\u0438\u0441\u044C \u043F\u043E\u0441\u043B\u0435 \u0448\u0430\u0433\u0430 \u0430\u0433\u0435\u043D\u0442\u0430."
+      });
       return;
     }
     for (const record of view.rows) {
       const row = element("div", "adv-row");
       const rowHead = element("div", "adv-row-head");
       const badgeHost = element("span");
-      mountBadge(badgeHost, { label: record.severity ?? "nit", tone: severityTone(record.severity) });
-      rowHead.append(badgeHost, element("span", "adv-time", formatTime(record.at)));
+      mountBadge(badgeHost, {
+        label: record.severity ?? "nit",
+        tone: severityTone(record.severity)
+      });
+      rowHead.append(
+        badgeHost,
+        element("span", "adv-time", formatTime(record.at))
+      );
       row.append(rowHead, element("p", "adv-note", record.note ?? ""));
       const actions = element("div", "adv-actions");
       mountButton(actions, {
@@ -2998,13 +3023,25 @@ ${GUEST_UI_LOOK_CSS}`;
     controls.next?.update({ checked: Boolean(effective.nextPrompt) });
     if (controls.mode === "select") {
       const providerId = effective.provider || state.providers[0]?.id || "";
-      const providerOptions = state.providers.map((provider) => ({ id: provider.id, label: provider.name }));
+      const providerOptions = state.providers.map((provider) => ({
+        id: provider.id,
+        label: provider.name
+      }));
       if (providerId && !providerOptions.some((option) => option.id === providerId)) {
-        providerOptions.unshift({ id: providerId, label: `${providerId} (\u0442\u0435\u043A\u0443\u0449\u0438\u0439)` });
+        providerOptions.unshift({
+          id: providerId,
+          label: `${providerId} (\u0442\u0435\u043A\u0443\u0449\u0438\u0439)`
+        });
       }
-      controls.providerSelect?.update({ value: providerId || null, options: providerOptions });
+      controls.providerSelect?.update({
+        value: providerId || null,
+        options: providerOptions
+      });
       const models = modelsOf(providerId);
-      const modelOptions = models.map((model) => ({ id: model.id, label: model.name }));
+      const modelOptions = models.map((model) => ({
+        id: model.id,
+        label: model.name
+      }));
       const modelId = effective.model || models[0]?.id || "";
       if (modelId && !modelOptions.some((option) => option.id === modelId)) {
         modelOptions.unshift({ id: modelId, label: `${modelId} (\u0442\u0435\u043A\u0443\u0449\u0430\u044F)` });
@@ -3020,7 +3057,12 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     }
     const form = settingsFormValues(state.config, state.draft, DEFAULTS);
-    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars", "nextPromptMaxChars"]) {
+    for (const key of [
+      "immuneTurns",
+      "maxDeltaMessages",
+      "noteMaxChars",
+      "nextPromptMaxChars"
+    ]) {
       fieldHandles[key]?.update({ value: form[key] });
     }
     renderSettingsNotice();
@@ -3028,11 +3070,17 @@ ${GUEST_UI_LOOK_CSS}`;
   function renderSettingsNotice() {
     settingsNotice.replaceChildren();
     if (state.message) {
-      mountBanner(settingsNotice, { tone: state.message.tone, title: state.message.text });
+      mountBanner(settingsNotice, {
+        tone: state.message.tone,
+        title: state.message.text
+      });
       return;
     }
     if (state.draft !== null) {
-      mountBanner(settingsNotice, { tone: "info", title: "\u0415\u0441\u0442\u044C \u043D\u0435\u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u044B\u0435 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F" });
+      mountBanner(settingsNotice, {
+        tone: "info",
+        title: "\u0415\u0441\u0442\u044C \u043D\u0435\u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u044B\u0435 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F"
+      });
     }
   }
   function renderStatus() {
@@ -3067,19 +3115,32 @@ ${GUEST_UI_LOOK_CSS}`;
       ["\u041C\u043E\u0434\u0435\u043B\u044C", status?.model ?? "\u043D\u0435\u0442 (model-missing)"],
       ["\u0412\u043A\u043B\u044E\u0447\u0451\u043D", status ? status.enabled ? "\u0434\u0430" : "\u043D\u0435\u0442" : "\u2014"],
       ["\u0412\u044B\u0437\u043E\u0432\u043E\u0432", status?.calls ?? 0],
-      ["\u0414\u0440\u043E\u043F\u043E\u0432", status ? `${status.drops?.empty ?? 0} \u043F\u0443\u0441\u0442\u043E \xB7 ${status.drops?.unparsed ?? 0} \u0440\u0430\u0437\u0431\u043E\u0440 \xB7 ${status.drops?.error ?? 0} \u043E\u0448\u0438\u0431\u043A\u0438` : "\u2014"],
+      [
+        "\u0414\u0440\u043E\u043F\u043E\u0432",
+        status ? `${status.drops?.empty ?? 0} \u043F\u0443\u0441\u0442\u043E \xB7 ${status.drops?.unparsed ?? 0} \u0440\u0430\u0437\u0431\u043E\u0440 \xB7 ${status.drops?.error ?? 0} \u043E\u0448\u0438\u0431\u043A\u0438` : "\u2014"
+      ],
+      [
+        "\u041F\u043E\u0434\u0441\u043A\u0430\u0437\u043E\u043A",
+        status?.suggest ? `${status.suggest.calls ?? 0} \xB7 \u043F\u0443\u0441\u0442\u043E ${status.suggest.empty ?? 0} \xB7 \u043E\u0448\u0438\u0431\u043E\u043A ${status.suggest.error ?? 0}` : "\u2014"
+      ],
       ["\u041F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0439 \u0441\u043E\u0432\u0435\u0442", latest ? formatTime(latest.at) : "\u0441\u043E\u0432\u0435\u0442\u043E\u0432 \u0435\u0449\u0451 \u043D\u0435 \u0431\u044B\u043B\u043E"],
       ["\u0421\u0440\u0435\u0434\u043D\u044F\u044F \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430", average === null ? "\u2014" : `${average} \u043C\u0441`]
     ];
     for (const [label, value] of rows) {
       const row = element("div", "adv-status-row");
-      row.append(element("span", "adv-status-label", label), element("span", "adv-status-value", String(value)));
+      row.append(
+        element("span", "adv-status-label", label),
+        element("span", "adv-status-value", String(value))
+      );
       statusPane.append(row);
     }
   }
   function latestAdvice() {
     const advices = state.records.filter((record) => record.kind === "advice");
-    return advices.reduce((best, record) => !best || (record.at ?? 0) > (best.at ?? 0) ? record : best, null);
+    return advices.reduce(
+      (best, record) => !best || (record.at ?? 0) > (best.at ?? 0) ? record : best,
+      null
+    );
   }
   function averageLatency() {
     const values = state.records.map((record) => record.ms).filter((ms) => typeof ms === "number" && ms >= 0);
@@ -3138,7 +3199,10 @@ ${GUEST_UI_LOOK_CSS}`;
       state.providers = [];
     }
     state.records = mergeRecords(journals);
-    state.status = statuses.reduce((best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best, null);
+    state.status = statuses.reduce(
+      (best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best,
+      null
+    );
   }
   async function updateConfig() {
     try {
@@ -3156,7 +3220,12 @@ ${GUEST_UI_LOOK_CSS}`;
   }
   function settingsValues() {
     const merged = { ...state.config, ...state.draft ?? {} };
-    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars", "nextPromptMaxChars"]) {
+    for (const key of [
+      "immuneTurns",
+      "maxDeltaMessages",
+      "noteMaxChars",
+      "nextPromptMaxChars"
+    ]) {
       merged[key] = Number.parseInt(String(merged[key]), 10);
     }
     return merged;
@@ -3167,9 +3236,15 @@ ${GUEST_UI_LOOK_CSS}`;
       await host.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
       state.config = config;
       state.draft = null;
-      state.message = errors.length ? { tone: "warning", text: `\u0421\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E, \u043D\u043E \u043C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0437\u0430\u0434\u0430\u043D\u0430 (${errors[0]}).` } : { tone: "success", text: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B." };
+      state.message = errors.length ? {
+        tone: "warning",
+        text: `\u0421\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E, \u043D\u043E \u043C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0437\u0430\u0434\u0430\u043D\u0430 (${errors[0]}).`
+      } : { tone: "success", text: "\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B." };
     } catch (error) {
-      state.message = { tone: "error", text: `\u041D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E: ${error?.message ?? error}` };
+      state.message = {
+        tone: "error",
+        text: `\u041D\u0435 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u043E: ${error?.message ?? error}`
+      };
     }
     renderSettings();
   }

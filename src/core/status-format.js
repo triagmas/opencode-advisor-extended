@@ -1,7 +1,13 @@
 export const STALE_AFTER_MS = 30_000
 
 export function emptyCounters() {
-  return { calls: 0, drops: { empty: 0, unparsed: 0, error: 0 } }
+  return {
+    calls: 0,
+    drops: { empty: 0, unparsed: 0, error: 0 },
+    // Separate on purpose: a silent card pipeline must not look like a silent
+    // reviewer. `calls` counts reviewer calls, `suggest.calls` prediction calls.
+    suggest: { calls: 0, empty: 0, error: 0 },
+  }
 }
 
 /** New heartbeat state from the previous one and a patch, stamped with `now`. */
@@ -11,6 +17,7 @@ export function buildStatus(prev = {}, patch = {}, now = Date.now()) {
     ...base,
     ...patch,
     drops: { ...base.drops, ...(patch.drops ?? {}) },
+    suggest: { ...base.suggest, ...(patch.suggest ?? {}) },
     at: now,
   }
 }
