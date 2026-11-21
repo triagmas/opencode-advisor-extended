@@ -6,12 +6,15 @@ export const DEFAULTS = Object.freeze({
   maxDeltaMessages: 60,
   noteMaxChars: 768,
   proseFallback: false,
+  nextPrompt: true,
+  nextPromptMaxChars: 120,
 })
 
 const LIMITS = {
   immuneTurns: { min: 0, max: 50 },
   maxDeltaMessages: { min: 0, max: 500 },
   noteMaxChars: { min: 128, max: 4096 },
+  nextPromptMaxChars: { min: 50, max: 2000 },
 }
 
 function text(value) {
@@ -45,6 +48,8 @@ export function normalizeConfig(raw) {
     maxDeltaMessages: number(input.maxDeltaMessages, DEFAULTS.maxDeltaMessages, LIMITS.maxDeltaMessages),
     noteMaxChars: number(input.noteMaxChars, DEFAULTS.noteMaxChars, LIMITS.noteMaxChars),
     proseFallback: bool(input.proseFallback, DEFAULTS.proseFallback),
+    nextPrompt: bool(input.nextPrompt, DEFAULTS.nextPrompt),
+    nextPromptMaxChars: number(input.nextPromptMaxChars, DEFAULTS.nextPromptMaxChars, LIMITS.nextPromptMaxChars),
   }
 
   const errors = []

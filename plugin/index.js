@@ -35,12 +35,15 @@ var DEFAULTS = Object.freeze({
   immuneTurns: 3,
   maxDeltaMessages: 60,
   noteMaxChars: 768,
-  proseFallback: false
+  proseFallback: false,
+  nextPrompt: true,
+  nextPromptMaxChars: 120
 });
 var LIMITS = {
   immuneTurns: { min: 0, max: 50 },
   maxDeltaMessages: { min: 0, max: 500 },
-  noteMaxChars: { min: 128, max: 4096 }
+  noteMaxChars: { min: 128, max: 4096 },
+  nextPromptMaxChars: { min: 50, max: 2e3 }
 };
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -64,7 +67,9 @@ function normalizeConfig(raw) {
     immuneTurns: number(input.immuneTurns, DEFAULTS.immuneTurns, LIMITS.immuneTurns),
     maxDeltaMessages: number(input.maxDeltaMessages, DEFAULTS.maxDeltaMessages, LIMITS.maxDeltaMessages),
     noteMaxChars: number(input.noteMaxChars, DEFAULTS.noteMaxChars, LIMITS.noteMaxChars),
-    proseFallback: bool(input.proseFallback, DEFAULTS.proseFallback)
+    proseFallback: bool(input.proseFallback, DEFAULTS.proseFallback),
+    nextPrompt: bool(input.nextPrompt, DEFAULTS.nextPrompt),
+    nextPromptMaxChars: number(input.nextPromptMaxChars, DEFAULTS.nextPromptMaxChars, LIMITS.nextPromptMaxChars)
   };
   const errors = [];
   if (config.provider === "" || config.model === "") errors.push("model-missing");
@@ -99,6 +104,9 @@ var ROTATE_LINES = 5e3;
 function journalFileName(locationDir) {
   const digest = createHash("sha256").update(String(locationDir ?? "")).digest("hex");
   return `journal-${digest.slice(0, 8)}.jsonl`;
+}
+function suggestionFileName(locationDir) {
+  return journalFileName(locationDir).replace("journal-", "suggestion-").replace(".jsonl", ".json");
 }
 
 // src/core/journal.js
@@ -155,6 +163,35 @@ function buildProvidersSnapshot(models, providers, now = Date.now()) {
     );
   }
   return { at: now, providers: list };
+}
+
+// src/core/next-prompt.js
+var NEXT_PROMPT_MAX_CHARS = 120;
+var NEXT_PROMPT_LIMITS = { min: 50, max: 2e3 };
+var SYSTEM = `\u0422\u044B \u043F\u0440\u0435\u0434\u0441\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0448\u044C \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0435\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0430 \u0432 \u0447\u0430\u0442\u0435 \u0441 \u0418\u0418-\u0430\u0433\u0435\u043D\u0442\u043E\u043C.
+\u041F\u0440\u043E\u0447\u0438\u0442\u0430\u0439 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0435 \u0445\u043E\u0434\u044B \u0438 \u043D\u0430\u043F\u0438\u0448\u0438 \u041E\u0414\u041D\u0423 \u043A\u043E\u0440\u043E\u0442\u043A\u0443\u044E \u0444\u0440\u0430\u0437\u0443 \u043E\u0442 \u043B\u0438\u0446\u0430 \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0430: \u0447\u0442\u043E \u043E\u043D,
+\u0441\u043A\u043E\u0440\u0435\u0435 \u0432\u0441\u0435\u0433\u043E, \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u0442 \u0438\u043B\u0438 \u0443\u0442\u043E\u0447\u043D\u0438\u0442 \u0434\u0430\u043B\u044C\u0448\u0435. \u0411\u0435\u0437 \u043A\u0430\u0432\u044B\u0447\u0435\u043A, \u0431\u0435\u0437 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u0438\u0439, \u0431\u0435\u0437
+\u0432\u0441\u0442\u0443\u043F\u043B\u0435\u043D\u0438\u044F. \u0415\u0441\u043B\u0438 \u043F\u0440\u043E\u0434\u043E\u043B\u0436\u0435\u043D\u0438\u044F \u043D\u0435 \u0432\u0438\u0434\u043D\u043E, \u043E\u0442\u0432\u0435\u0442\u044C \u0440\u043E\u0432\u043D\u043E NONE.`;
+function buildNextPromptPrompt(transcript) {
+  return `${SYSTEM}
+
+\u0425\u043E\u0434\u044B:
+${String(transcript ?? "").slice(0, 12e3)}
+
+\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0435\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0430:`;
+}
+function parseSuggestion(text2, maxChars = NEXT_PROMPT_MAX_CHARS) {
+  let line = String(text2 ?? "").split("\n").map((part) => part.trim()).find((part) => part !== "");
+  if (!line) return null;
+  line = line.replace(/^["'«»“”\s]+|["'«»“”\s]+$/g, "");
+  if (/^none$/i.test(line)) return null;
+  if (!/[\p{L}\p{N}]/u.test(line)) return null;
+  const limit = Math.min(
+    NEXT_PROMPT_LIMITS.max,
+    Math.max(NEXT_PROMPT_LIMITS.min, Number(maxChars) || NEXT_PROMPT_MAX_CHARS)
+  );
+  const chars = [...line];
+  return chars.length > limit ? chars.slice(0, limit).join("") : line;
 }
 
 // src/core/limits.js
@@ -490,6 +527,7 @@ async function setup(ctx) {
   const configPath = join(configDir, "config.json");
   const statusPath = join(stateDir, statusFileName(locationDir));
   const journalPath = join(stateDir, journalFileName(locationDir));
+  const suggestionPath = join(stateDir, suggestionFileName(locationDir));
   await mkdir2(configDir, { recursive: true });
   await mkdir2(stateDir, { recursive: true });
   let raw = await readJson(configPath);
@@ -506,6 +544,8 @@ async function setup(ctx) {
     if (!state) {
       state = {
         lastSeenID: null,
+        lastSuggestAt: 0,
+        suggesting: false,
         turns: 0,
         immuneTurns: config.immuneTurns,
         inFlight: false,
@@ -692,6 +732,7 @@ async function setup(ctx) {
         const sessionID = event.data?.sessionID;
         if (!sessionID) return;
         await onStepEnded(sessionID);
+        await suggestNext(sessionID);
         return;
       }
       default:
@@ -753,6 +794,46 @@ async function setup(ctx) {
       }
     }
     if (Object.keys(patch).length > 0) await flush(patch);
+  }
+  const SUGGEST_EVERY_MS = 9e4;
+  async function suggestNext(sessionID) {
+    const state = stateOf(sessionID);
+    if (!config.nextPrompt || state.disabled) return;
+    if (state.suggesting) return;
+    if (Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS) return;
+    const model = modelRef(config);
+    if (!model) return;
+    let raw2;
+    try {
+      raw2 = await ctx.session.context({ sessionID });
+    } catch {
+      return;
+    }
+    const messages = (Array.isArray(raw2) ? raw2 : []).map((message) => ({
+      role: message?.type ?? message?.role ?? "user",
+      text: Array.isArray(message?.content) ? message.content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n") : typeof message?.text === "string" ? message.text : "",
+      description: message?.description
+    })).filter((message) => !String(message.description ?? "").startsWith("advisor:")).filter((message) => message.text.trim() !== "").slice(-20);
+    if (messages.length === 0) return;
+    const transcript = messages.map((message) => `${message.role === "user" ? "\u0447\u0435\u043B\u043E\u0432\u0435\u043A" : "\u0430\u0433\u0435\u043D\u0442"}: ${message.text}`).join("\n\n");
+    state.suggesting = true;
+    try {
+      const answer = await ctx.experimental.generate.text({
+        model: { providerID: model.providerID, id: model.modelID },
+        prompt: buildNextPromptPrompt(transcript)
+      });
+      const text2 = parseSuggestion(answer?.text, config.nextPromptMaxChars);
+      if (!text2) return;
+      state.lastSuggestAt = Date.now();
+      await writeJsonAtomic(suggestionPath, {
+        at: state.lastSuggestAt,
+        sessionID,
+        text: text2
+      });
+    } catch {
+    } finally {
+      state.suggesting = false;
+    }
   }
   async function consume(iterable) {
     try {

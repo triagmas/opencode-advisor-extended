@@ -7,7 +7,8 @@ import { parseCommand } from "../core/command.js";
 import { DEFAULTS, modelRef, normalizeConfig } from "../core/config.js";
 import { appendRecord } from "../core/journal.js";
 import { buildProvidersSnapshot } from "../core/providers.js";
-import { journalFileName } from "../core/journal-format.js";
+import { journalFileName, suggestionFileName } from "../core/journal-format.js";
+import { buildNextPromptPrompt, parseSuggestion } from "../core/next-prompt.js";
 import { limitText } from "../core/limits.js";
 import { canReview, shouldReview } from "../core/scope.js";
 import { buildStatus, emptyCounters, statusFileName } from "../core/status.js";
@@ -67,6 +68,7 @@ export async function setup(ctx) {
   const configPath = join(configDir, "config.json");
   const statusPath = join(stateDir, statusFileName(locationDir));
   const journalPath = join(stateDir, journalFileName(locationDir));
+  const suggestionPath = join(stateDir, suggestionFileName(locationDir));
 
   await mkdir(configDir, { recursive: true });
   await mkdir(stateDir, { recursive: true });
@@ -87,6 +89,8 @@ export async function setup(ctx) {
     if (!state) {
       state = {
         lastSeenID: null,
+        lastSuggestAt: 0,
+        suggesting: false,
         turns: 0,
         immuneTurns: config.immuneTurns,
         inFlight: false,
@@ -307,6 +311,7 @@ export async function setup(ctx) {
         const sessionID = event.data?.sessionID;
         if (!sessionID) return;
         await onStepEnded(sessionID);
+        await suggestNext(sessionID);
         return;
       }
       default:
@@ -384,6 +389,66 @@ export async function setup(ctx) {
     }
 
     if (Object.keys(patch).length > 0) await flush(patch);
+  }
+
+  const SUGGEST_EVERY_MS = 90_000;
+
+  /** Writes the panel's suggested next message; never sends it anywhere. */
+  async function suggestNext(sessionID) {
+    const state = stateOf(sessionID);
+    if (!config.nextPrompt || state.disabled) return;
+    if (state.suggesting) return;
+    if (Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS) return;
+    const model = modelRef(config);
+    if (!model) return;
+
+    let raw;
+    try {
+      raw = await ctx.session.context({ sessionID });
+    } catch {
+      return;
+    }
+    const messages = (Array.isArray(raw) ? raw : [])
+      .map((message) => ({
+        role: message?.type ?? message?.role ?? "user",
+        text: Array.isArray(message?.content)
+          ? message.content
+              .filter((part) => part?.type === "text" && typeof part.text === "string")
+              .map((part) => part.text)
+              .join("\n")
+          : typeof message?.text === "string"
+            ? message.text
+            : "",
+        description: message?.description,
+      }))
+      .filter((message) => !String(message.description ?? "").startsWith("advisor:"))
+      .filter((message) => message.text.trim() !== "")
+      .slice(-20);
+    if (messages.length === 0) return;
+
+    const transcript = messages
+      .map((message) => `${message.role === "user" ? "человек" : "агент"}: ${message.text}`)
+      .join("\n\n");
+
+    state.suggesting = true;
+    try {
+      const answer = await ctx.experimental.generate.text({
+        model: { providerID: model.providerID, id: model.modelID },
+        prompt: buildNextPromptPrompt(transcript),
+      });
+      const text = parseSuggestion(answer?.text, config.nextPromptMaxChars);
+      if (!text) return;
+      state.lastSuggestAt = Date.now();
+      await writeJsonAtomic(suggestionPath, {
+        at: state.lastSuggestAt,
+        sessionID,
+        text,
+      });
+    } catch {
+      // A suggestion is a nicety: a failed call leaves the previous one.
+    } finally {
+      state.suggesting = false;
+    }
   }
 
   async function consume(iterable) {

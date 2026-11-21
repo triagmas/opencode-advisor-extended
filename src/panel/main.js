@@ -31,6 +31,7 @@ const state = {
   status: null,
   config: { ...DEFAULTS },
   providers: [],
+  suggestion: null,
   draft: null,
   message: null,
 }
@@ -50,6 +51,8 @@ style.textContent = `
   .adv-status-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--oc-border); }
   .adv-status-label { color: var(--oc-muted); }
   .adv-status-value { text-align: right; overflow-wrap: anywhere; }
+  .adv-suggest { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted); }
+  .adv-suggest-text { font-style: italic; overflow-wrap: anywhere; }
 `
 document.head.append(style)
 
@@ -68,7 +71,15 @@ head.append(headTitle, headBadge)
 
 const tabsHost = element('div')
 const panes = element('div', 'adv-pane')
-layout.append(head, tabsHost, panes)
+
+// Next message the model expects, offered as input text — never sent by itself.
+const suggestBox = element('div', 'adv-suggest')
+const suggestText = element('div', 'adv-suggest-text')
+const suggestActions = element('div', 'adv-actions')
+suggestBox.append(suggestText, suggestActions)
+suggestBox.hidden = true
+
+layout.append(head, suggestBox, tabsHost, panes)
 root.append(layout)
 
 // --- journal --------------------------------------------------------------
@@ -96,7 +107,7 @@ const settingsNotice = element('div')
 settingsPane.append(settingsFields, settingsActions, settingsNotice)
 
 const fieldHandles = {}
-const controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null }
+const controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null, next: null }
 
 function setDraft(patch) {
   state.draft = { ...(state.draft ?? {}), ...patch }
@@ -168,6 +179,7 @@ function buildSettings() {
   addField('immuneTurns', 'Пропускать шагов после совета')
   addField('maxDeltaMessages', 'Сообщений в обзоре (0 — без ограничения)')
   addField('noteMaxChars', 'Длина совета, знаков')
+  addField('nextPromptMaxChars', 'Длина предложения, знаков (50–2000)')
 
   controls.enabled = mountSwitch(settingsFields, {
     label: 'Ревьюер включён',
@@ -179,6 +191,12 @@ function buildSettings() {
     label: 'Доставлять прозу как nit',
     checked: DEFAULTS.proseFallback,
     onChange: (checked) => setDraft({ proseFallback: checked }),
+  })
+
+  controls.next = mountSwitch(settingsFields, {
+    label: 'Предлагать следующее сообщение',
+    checked: DEFAULTS.nextPrompt,
+    onChange: (checked) => setDraft({ nextPrompt: checked }),
   })
 }
 
@@ -299,6 +317,7 @@ function renderSettings() {
   const effective = { ...state.config, ...(state.draft ?? {}) }
   controls.enabled?.update({ checked: Boolean(effective.enabled) })
   controls.prose?.update({ checked: Boolean(effective.proseFallback) })
+  controls.next?.update({ checked: Boolean(effective.nextPrompt) })
 
   if (controls.mode === 'select') {
     const providerId = effective.provider || state.providers[0]?.id || ''
@@ -330,7 +349,7 @@ function renderSettings() {
   // Numeric limits are text fields in both modes; a missing key shows the
   // plugin's own default instead of an empty box.
   const form = settingsFormValues(state.config, state.draft, DEFAULTS)
-  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars', 'nextPromptMaxChars']) {
     fieldHandles[key]?.update({ value: form[key] })
   }
   renderSettingsNotice()
@@ -405,6 +424,33 @@ function averageLatency() {
   return Math.round(values.reduce((sum, ms) => sum + ms, 0) / values.length)
 }
 
+function renderSuggestion() {
+  const suggestion = state.suggestion
+  if (!suggestion?.text) {
+    suggestBox.hidden = true
+    return
+  }
+  suggestBox.hidden = false
+  suggestText.textContent = suggestion.text
+  if (suggestActions.childElementCount === 0) {
+    mountButton(suggestActions, {
+      label: 'В инпут',
+      variant: 'default',
+      onClick: () => {
+        void host.compose({ text: suggestion.text ?? state.suggestion?.text ?? '' })
+      },
+    })
+    mountButton(suggestActions, {
+      label: 'Скрыть',
+      variant: 'ghost',
+      onClick: () => {
+        state.suggestion = null
+        renderSuggestion()
+      },
+    })
+  }
+}
+
 function renderHead() {
   headBadge.replaceChildren()
   const connection = connectionState(state.status, Date.now())
@@ -427,6 +473,7 @@ function render() {
     renderedTab = state.tab
   }
   renderHead()
+  renderSuggestion()
   if (state.tab === 'journal') renderJournal()
   if (state.tab === 'settings') renderSettings()
   if (state.tab === 'status') renderStatus()
@@ -445,6 +492,7 @@ async function updateState() {
 
   const journals = []
   const statuses = []
+  const suggestions = []
   for (const entry of entries) {
     const path = `${STATE_DIR}/${entry.name}`
     try {
@@ -454,6 +502,9 @@ async function updateState() {
       } else if (entry.name.startsWith('status-') && entry.name.endsWith('.json')) {
         const { content } = await host.readFile(path)
         statuses.push(JSON.parse(content))
+      } else if (entry.name.startsWith('suggestion-') && entry.name.endsWith('.json')) {
+        const { content } = await host.readFile(path)
+        suggestions.push(JSON.parse(content))
       }
     } catch {
       // One unreadable file must not hide the rest of the journal.
@@ -469,6 +520,11 @@ async function updateState() {
     state.providers = []
   }
 
+  const latestSuggestion = suggestions.reduce(
+    (best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best),
+    null,
+  )
+  if (latestSuggestion) state.suggestion = latestSuggestion
   state.records = mergeRecords(journals)
   state.status = statuses.reduce((best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best), null)
 }
@@ -491,7 +547,7 @@ async function refresh() {
 
 function settingsValues() {
   const merged = { ...state.config, ...(state.draft ?? {}) }
-  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+  for (const key of ['immuneTurns', 'maxDeltaMessages', 'noteMaxChars', 'nextPromptMaxChars']) {
     merged[key] = Number.parseInt(String(merged[key]), 10)
   }
   return merged

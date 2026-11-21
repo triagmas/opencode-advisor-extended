@@ -2648,12 +2648,15 @@ ${GUEST_UI_LOOK_CSS}`;
     immuneTurns: 3,
     maxDeltaMessages: 60,
     noteMaxChars: 768,
-    proseFallback: false
+    proseFallback: false,
+    nextPrompt: true,
+    nextPromptMaxChars: 120
   });
   var LIMITS = {
     immuneTurns: { min: 0, max: 50 },
     maxDeltaMessages: { min: 0, max: 500 },
-    noteMaxChars: { min: 128, max: 4096 }
+    noteMaxChars: { min: 128, max: 4096 },
+    nextPromptMaxChars: { min: 50, max: 2e3 }
   };
   function text(value) {
     return typeof value === "string" ? value.trim() : "";
@@ -2677,7 +2680,9 @@ ${GUEST_UI_LOOK_CSS}`;
       immuneTurns: number(input.immuneTurns, DEFAULTS.immuneTurns, LIMITS.immuneTurns),
       maxDeltaMessages: number(input.maxDeltaMessages, DEFAULTS.maxDeltaMessages, LIMITS.maxDeltaMessages),
       noteMaxChars: number(input.noteMaxChars, DEFAULTS.noteMaxChars, LIMITS.noteMaxChars),
-      proseFallback: bool(input.proseFallback, DEFAULTS.proseFallback)
+      proseFallback: bool(input.proseFallback, DEFAULTS.proseFallback),
+      nextPrompt: bool(input.nextPrompt, DEFAULTS.nextPrompt),
+      nextPromptMaxChars: number(input.nextPromptMaxChars, DEFAULTS.nextPromptMaxChars, LIMITS.nextPromptMaxChars)
     };
     const errors = [];
     if (config.provider === "" || config.model === "") errors.push("model-missing");
@@ -2761,6 +2766,7 @@ ${GUEST_UI_LOOK_CSS}`;
     status: null,
     config: { ...DEFAULTS },
     providers: [],
+    suggestion: null,
     draft: null,
     message: null
   };
@@ -2779,6 +2785,8 @@ ${GUEST_UI_LOOK_CSS}`;
   .adv-status-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--oc-border); }
   .adv-status-label { color: var(--oc-muted); }
   .adv-status-value { text-align: right; overflow-wrap: anywhere; }
+  .adv-suggest { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted); }
+  .adv-suggest-text { font-style: italic; overflow-wrap: anywhere; }
 `;
   document.head.append(style);
   function element(tag, className, text2) {
@@ -2794,7 +2802,12 @@ ${GUEST_UI_LOOK_CSS}`;
   head.append(headTitle, headBadge);
   var tabsHost = element("div");
   var panes = element("div", "adv-pane");
-  layout.append(head, tabsHost, panes);
+  var suggestBox = element("div", "adv-suggest");
+  var suggestText = element("div", "adv-suggest-text");
+  var suggestActions = element("div", "adv-actions");
+  suggestBox.append(suggestText, suggestActions);
+  suggestBox.hidden = true;
+  layout.append(head, suggestBox, tabsHost, panes);
   root.append(layout);
   var journalPane = element("div", "adv-pane");
   var journalControls = element("div");
@@ -2814,7 +2827,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var settingsNotice = element("div");
   settingsPane.append(settingsFields, settingsActions, settingsNotice);
   var fieldHandles = {};
-  var controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null };
+  var controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null, next: null };
   function setDraft(patch) {
     state.draft = { ...state.draft ?? {}, ...patch };
     state.message = null;
@@ -2878,6 +2891,7 @@ ${GUEST_UI_LOOK_CSS}`;
     addField("immuneTurns", "\u041F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432 \u043F\u043E\u0441\u043B\u0435 \u0441\u043E\u0432\u0435\u0442\u0430");
     addField("maxDeltaMessages", "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u0432 \u043E\u0431\u0437\u043E\u0440\u0435 (0 \u2014 \u0431\u0435\u0437 \u043E\u0433\u0440\u0430\u043D\u0438\u0447\u0435\u043D\u0438\u044F)");
     addField("noteMaxChars", "\u0414\u043B\u0438\u043D\u0430 \u0441\u043E\u0432\u0435\u0442\u0430, \u0437\u043D\u0430\u043A\u043E\u0432");
+    addField("nextPromptMaxChars", "\u0414\u043B\u0438\u043D\u0430 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0435\u043D\u0438\u044F, \u0437\u043D\u0430\u043A\u043E\u0432 (50\u20132000)");
     controls.enabled = mountSwitch(settingsFields, {
       label: "\u0420\u0435\u0432\u044C\u044E\u0435\u0440 \u0432\u043A\u043B\u044E\u0447\u0451\u043D",
       checked: DEFAULTS.enabled,
@@ -2887,6 +2901,11 @@ ${GUEST_UI_LOOK_CSS}`;
       label: "\u0414\u043E\u0441\u0442\u0430\u0432\u043B\u044F\u0442\u044C \u043F\u0440\u043E\u0437\u0443 \u043A\u0430\u043A nit",
       checked: DEFAULTS.proseFallback,
       onChange: (checked) => setDraft({ proseFallback: checked })
+    });
+    controls.next = mountSwitch(settingsFields, {
+      label: "\u041F\u0440\u0435\u0434\u043B\u0430\u0433\u0430\u0442\u044C \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0435\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435",
+      checked: DEFAULTS.nextPrompt,
+      onChange: (checked) => setDraft({ nextPrompt: checked })
     });
   }
   mountButton(settingsActions, {
@@ -2984,6 +3003,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const effective = { ...state.config, ...state.draft ?? {} };
     controls.enabled?.update({ checked: Boolean(effective.enabled) });
     controls.prose?.update({ checked: Boolean(effective.proseFallback) });
+    controls.next?.update({ checked: Boolean(effective.nextPrompt) });
     if (controls.mode === "select") {
       const providerId = effective.provider || state.providers[0]?.id || "";
       const providerOptions = state.providers.map((provider) => ({ id: provider.id, label: provider.name }));
@@ -3008,7 +3028,7 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     }
     const form = settingsFormValues(state.config, state.draft, DEFAULTS);
-    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars", "nextPromptMaxChars"]) {
       fieldHandles[key]?.update({ value: form[key] });
     }
     renderSettingsNotice();
@@ -3074,6 +3094,32 @@ ${GUEST_UI_LOOK_CSS}`;
     if (values.length === 0) return null;
     return Math.round(values.reduce((sum, ms) => sum + ms, 0) / values.length);
   }
+  function renderSuggestion() {
+    const suggestion = state.suggestion;
+    if (!suggestion?.text) {
+      suggestBox.hidden = true;
+      return;
+    }
+    suggestBox.hidden = false;
+    suggestText.textContent = suggestion.text;
+    if (suggestActions.childElementCount === 0) {
+      mountButton(suggestActions, {
+        label: "\u0412 \u0438\u043D\u043F\u0443\u0442",
+        variant: "default",
+        onClick: () => {
+          void host.compose({ text: suggestion.text ?? state.suggestion?.text ?? "" });
+        }
+      });
+      mountButton(suggestActions, {
+        label: "\u0421\u043A\u0440\u044B\u0442\u044C",
+        variant: "ghost",
+        onClick: () => {
+          state.suggestion = null;
+          renderSuggestion();
+        }
+      });
+    }
+  }
   function renderHead() {
     headBadge.replaceChildren();
     const connection = connectionState(state.status, Date.now());
@@ -3092,6 +3138,7 @@ ${GUEST_UI_LOOK_CSS}`;
       renderedTab = state.tab;
     }
     renderHead();
+    renderSuggestion();
     if (state.tab === "journal") renderJournal();
     if (state.tab === "settings") renderSettings();
     if (state.tab === "status") renderStatus();
@@ -3105,6 +3152,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     const journals = [];
     const statuses = [];
+    const suggestions = [];
     for (const entry of entries) {
       const path = `${STATE_DIR}/${entry.name}`;
       try {
@@ -3114,6 +3162,9 @@ ${GUEST_UI_LOOK_CSS}`;
         } else if (entry.name.startsWith("status-") && entry.name.endsWith(".json")) {
           const { content } = await host.readFile(path);
           statuses.push(JSON.parse(content));
+        } else if (entry.name.startsWith("suggestion-") && entry.name.endsWith(".json")) {
+          const { content } = await host.readFile(path);
+          suggestions.push(JSON.parse(content));
         }
       } catch {
       }
@@ -3125,6 +3176,11 @@ ${GUEST_UI_LOOK_CSS}`;
     } catch {
       state.providers = [];
     }
+    const latestSuggestion = suggestions.reduce(
+      (best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best,
+      null
+    );
+    if (latestSuggestion) state.suggestion = latestSuggestion;
     state.records = mergeRecords(journals);
     state.status = statuses.reduce((best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best, null);
   }
@@ -3144,7 +3200,7 @@ ${GUEST_UI_LOOK_CSS}`;
   }
   function settingsValues() {
     const merged = { ...state.config, ...state.draft ?? {} };
-    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+    for (const key of ["immuneTurns", "maxDeltaMessages", "noteMaxChars", "nextPromptMaxChars"]) {
       merged[key] = Number.parseInt(String(merged[key]), 10);
     }
     return merged;
