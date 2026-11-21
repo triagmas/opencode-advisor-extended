@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, basename, join, resolve } from "node:path";
 
@@ -437,7 +437,11 @@ export async function setup(ctx) {
         prompt: buildNextPromptPrompt(transcript),
       });
       const text = parseSuggestion(answer?.text, config.nextPromptMaxChars);
-      if (!text) return;
+      if (!text) {
+        // The request is satisfied (or needs the person): drop the stale offer.
+        await unlink(suggestionPath).catch(() => {});
+        return;
+      }
       state.lastSuggestAt = Date.now();
       await writeJsonAtomic(suggestionPath, {
         at: state.lastSuggestAt,
