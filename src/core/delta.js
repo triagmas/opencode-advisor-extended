@@ -1,12 +1,15 @@
-function isOwnRecord(message) {
-  const description = typeof message?.description === 'string' ? message.description : ''
-  return description.startsWith('advisor:')
+export function isOwnRecord(message) {
+  const description =
+    typeof message?.description === "string" ? message.description : "";
+  return description.startsWith("advisor:");
 }
 
 function isCompaction(message) {
-  if (message?.role === 'compaction' || message?.type === 'compaction') return true
-  const description = typeof message?.description === 'string' ? message.description : ''
-  return description === 'compaction' || description.startsWith('compaction:')
+  if (message?.role === "compaction" || message?.type === "compaction")
+    return true;
+  const description =
+    typeof message?.description === "string" ? message.description : "";
+  return description === "compaction" || description.startsWith("compaction:");
 }
 
 /**
@@ -15,17 +18,23 @@ function isCompaction(message) {
  * `lastSeenID` follows the whole filtered tail so a window never re-reviews.
  */
 export function collectDelta(messages, lastSeenID, maxMessages) {
-  const list = Array.isArray(messages) ? messages : []
+  const list = Array.isArray(messages) ? messages : [];
 
-  let start = 0
+  let start = 0;
   if (lastSeenID != null) {
-    const index = list.findIndex((message) => message?.id === lastSeenID)
-    start = index === -1 ? 0 : index + 1
+    const index = list.findIndex((message) => message?.id === lastSeenID);
+    start = index === -1 ? 0 : index + 1;
   }
 
-  const fresh = list.slice(start).filter((message) => !isOwnRecord(message) && !isCompaction(message))
-  const lastID = fresh.length > 0 ? fresh[fresh.length - 1].id : lastSeenID ?? null
+  const fresh = list
+    .slice(start)
+    .filter((message) => !isOwnRecord(message) && !isCompaction(message));
+  const lastID =
+    fresh.length > 0 ? fresh[fresh.length - 1].id : (lastSeenID ?? null);
 
-  const window = typeof maxMessages === 'number' && maxMessages > 0 ? fresh.slice(-maxMessages) : fresh
-  return { messages: window, lastSeenID: lastID }
+  const window =
+    typeof maxMessages === "number" && maxMessages > 0
+      ? fresh.slice(-maxMessages)
+      : fresh;
+  return { messages: window, lastSeenID: lastID };
 }

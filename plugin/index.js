@@ -183,7 +183,8 @@ function isOwnRecord(message) {
   return description.startsWith("advisor:");
 }
 function isCompaction(message) {
-  if (message?.role === "compaction" || message?.type === "compaction") return true;
+  if (message?.role === "compaction" || message?.type === "compaction")
+    return true;
   const description = typeof message?.description === "string" ? message.description : "";
   return description === "compaction" || description.startsWith("compaction:");
 }
@@ -217,6 +218,61 @@ function parseAdviceFrame(text2) {
   if (!SEVERITIES.includes(frame.severity)) return null;
   if (typeof frame.guidance !== "string" || frame.guidance.trim() === "") return null;
   return { severity: frame.severity, guidance: frame.guidance.trim() };
+}
+
+// src/core/guard.js
+var SEVERITY_RANK = { nit: 0, concern: 1, blocker: 2 };
+var CONTENT_FREE_PHRASES = /* @__PURE__ */ new Set([
+  "stop",
+  "done",
+  "complete",
+  "no issue continue",
+  "lgtm",
+  "nothing to add",
+  "ok",
+  "okay",
+  "good",
+  "fine",
+  "looks good",
+  "looks fine",
+  "all good",
+  "all clear",
+  "no issue",
+  "no issues",
+  "nothing",
+  "\u043E\u043A",
+  "\u043E\u043A\u0435\u0439",
+  "\u0445\u043E\u0440\u043E\u0448\u043E",
+  "\u0432\u0441\u0435 \u0445\u043E\u0440\u043E\u0448\u043E",
+  "\u043D\u0435\u0442 \u0437\u0430\u043C\u0435\u0447\u0430\u043D\u0438\u0439",
+  "\u0437\u0430\u043C\u0435\u0447\u0430\u043D\u0438\u0439 \u043D\u0435\u0442",
+  "\u0432\u0441\u0435 \u0432 \u043F\u043E\u0440\u044F\u0434\u043A\u0435"
+]);
+var MAX_HISTORY = 4096;
+function normalizeNote(text2) {
+  return String(text2 ?? "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+function createEmissionGuard() {
+  const history = /* @__PURE__ */ new Map();
+  return {
+    accept(note) {
+      const key = normalizeNote(note?.note);
+      if (key === "") return false;
+      if (CONTENT_FREE_PHRASES.has(key)) return false;
+      const rank = SEVERITY_RANK[note?.severity] ?? 1;
+      const prior = history.get(key);
+      if (prior !== void 0 && rank <= prior) return false;
+      history.set(key, rank);
+      if (history.size > MAX_HISTORY) {
+        const oldest = history.keys().next().value;
+        if (oldest !== void 0) history.delete(oldest);
+      }
+      return true;
+    },
+    reset() {
+      history.clear();
+    }
+  };
 }
 
 // src/plugin/prompts.js
@@ -259,6 +315,15 @@ function toDeltaMessage(message) {
     description: message?.description
   };
 }
+function triggeredByAdvisor(messages) {
+  let userAt = -1;
+  let advisorAt = -1;
+  messages.forEach((message, index) => {
+    if (isOwnRecord(message)) advisorAt = index;
+    else if (message.role === "user") userAt = index;
+  });
+  return advisorAt > -1 && advisorAt > userAt;
+}
 function transcriptOf(messages) {
   return messages.map((message) => `${message.role}: ${message.text}`).join("\n\n");
 }
@@ -284,6 +349,8 @@ async function runReview({
     const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(
       toDeltaMessage
     );
+    if (triggeredByAdvisor(messages))
+      return { kind: "skipped", reason: "advisor-triggered" };
     const delta = collectDelta(
       messages,
       state.lastSeenID,
@@ -321,6 +388,9 @@ ${buildReviewPrompt(transcript)}`;
     if (!frame) return { kind: "dropped", reason: "unparsed", ms };
     const note = limitText(frame.guidance, config.noteMaxChars);
     if (note === "") return { kind: "dropped", reason: "empty", ms };
+    const guard = state.guard ??= createEmissionGuard();
+    if (!guard.accept({ severity: frame.severity, note }))
+      return { kind: "skipped", reason: "duplicate", ms };
     const delivered = `[advisor:${frame.severity}] ${note}`;
     try {
       if (frame.severity !== "nit") {

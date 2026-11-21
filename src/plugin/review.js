@@ -1,8 +1,9 @@
-import { collectDelta } from "../core/delta.js";
+import { collectDelta, isOwnRecord } from "../core/delta.js";
 import { parseAdviceFrame } from "../core/frame.js";
 import { limitText } from "../core/limits.js";
 import { markReviewed } from "../core/scope.js";
 import { modelRef } from "../core/config.js";
+import { createEmissionGuard } from "../core/guard.js";
 import { buildReviewPrompt, REVIEWER_SYSTEM } from "./prompts.js";
 
 const DELTA_MAX = 16_000;
@@ -26,6 +27,17 @@ function toDeltaMessage(message) {
     text: messageText(message),
     description: message?.description,
   };
+}
+
+/** True when the last human input is older than the last advisor insert. */
+function triggeredByAdvisor(messages) {
+  let userAt = -1;
+  let advisorAt = -1;
+  messages.forEach((message, index) => {
+    if (isOwnRecord(message)) advisorAt = index;
+    else if (message.role === "user") userAt = index;
+  });
+  return advisorAt > -1 && advisorAt > userAt;
 }
 
 function transcriptOf(messages) {
@@ -63,6 +75,11 @@ export async function runReview({
     const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(
       toDeltaMessage,
     );
+
+    // A step woken by our own steer answers the advice, not the person: review
+    // it and the reviewer starts commenting on its own notes.
+    if (triggeredByAdvisor(messages))
+      return { kind: "skipped", reason: "advisor-triggered" };
     const delta = collectDelta(
       messages,
       state.lastSeenID,
@@ -110,6 +127,11 @@ export async function runReview({
 
     const note = limitText(frame.guidance, config.noteMaxChars);
     if (note === "") return { kind: "dropped", reason: "empty", ms };
+
+    // The same advice never reaches the agent twice; an escalation still does.
+    const guard = (state.guard ??= createEmissionGuard());
+    if (!guard.accept({ severity: frame.severity, note }))
+      return { kind: "skipped", reason: "duplicate", ms };
 
     const delivered = `[advisor:${frame.severity}] ${note}`;
     try {

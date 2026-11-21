@@ -174,3 +174,56 @@ test("две сессии одновременно: советы не переп
   assert.match(byId.get("b"), /для b/);
   assert.deepEqual(calls.entry.map((x) => x.sessionID).sort(), ["a", "b"]);
 });
+
+test("шаг, разбуженный советом, не ревьюится", async () => {
+  const messages = [
+    { id: "u1", role: "user", text: "почини тест" },
+    { id: "a1", role: "synthetic", description: "advisor:concern", text: "[advisor:concern] допиши вывод" },
+    { id: "m1", role: "assistant", text: "готово" },
+  ];
+  const ctx = ctxWith('{"severity":"concern","guidance":"ещё совет"}', messages);
+  const r = await runReview({
+    ctx,
+    config,
+    sessionID: "s",
+    state: { lastSeenID: null, turns: 0 },
+    now: 1,
+  });
+  assert.equal(r.kind, "skipped");
+  assert.equal(r.reason, "advisor-triggered");
+  assert.equal(ctx.calls.synthetic.length, 0);
+  assert.equal(ctx.calls.entry.length, 0);
+});
+
+test("новое сообщение человека снова включает ревью", async () => {
+  const messages = [
+    { id: "a1", role: "synthetic", description: "advisor:concern", text: "[advisor:concern] допиши вывод" },
+    { id: "m1", role: "assistant", text: "дописал" },
+    { id: "u2", role: "user", text: "теперь проверь сборку" },
+    { id: "m2", role: "assistant", text: "собрал" },
+  ];
+  const ctx = ctxWith('{"severity":"concern","guidance":"прогони тесты"}', messages);
+  const r = await runReview({
+    ctx,
+    config,
+    sessionID: "s",
+    state: { lastSeenID: null, turns: 0 },
+    now: 1,
+  });
+  assert.equal(r.kind, "delivered");
+});
+
+test("один и тот же совет не доставляется дважды", async () => {
+  const messages = [{ id: "u1", role: "user", text: "старт" }];
+  const ctx = ctxWith('{"severity":"concern","guidance":"проверь край"}', messages);
+  const state = { lastSeenID: null, turns: 0 };
+  const first = await runReview({ ctx, config, sessionID: "s", state, now: 1 });
+
+  messages.push({ id: "m2", role: "assistant", text: "ещё шаг" });
+  const again = await runReview({ ctx, config, sessionID: "s", state, now: 2 });
+
+  assert.equal(first.kind, "delivered");
+  assert.equal(again.kind, "skipped");
+  assert.equal(again.reason, "duplicate");
+  assert.equal(ctx.calls.synthetic.length, 1);
+});
