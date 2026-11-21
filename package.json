@@ -34,10 +34,10 @@
       "blocks": [
         {
           "name": "AdvisorNext",
-          "description": "Advisor's next-step card with a button that puts the suggestion into the composer.",
+          "description": "Advisor's next-step card with check and cross: put the suggestion into the composer, or hide it.",
           "args": [],
           "entry": "block/index.html",
-          "height": 96
+          "height": 44
         }
       ],
       "filesystem": [

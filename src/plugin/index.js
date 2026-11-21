@@ -69,10 +69,23 @@ export async function setup(ctx) {
   const configPath = join(configDir, "config.json");
   const statusPath = join(stateDir, statusFileName(locationDir));
   const journalPath = join(stateDir, journalFileName(locationDir));
-  const suggestionPath = join(stateDir, suggestionFileName(locationDir));
+  const legacySuggestionPath = join(stateDir, suggestionFileName(locationDir));
+  const suggestionPathFor = (sessionID) =>
+    join(stateDir, suggestionFileName(locationDir, sessionID));
 
   await mkdir(configDir, { recursive: true });
   await mkdir(stateDir, { recursive: true });
+
+  // One suggestion file used to serve every session of the folder; move what
+  // it holds to that session's own name, so the card keeps its text.
+  const legacySuggestion = await readJson(legacySuggestionPath);
+  if (legacySuggestion?.sessionID) {
+    await writeJsonAtomic(
+      suggestionPathFor(legacySuggestion.sessionID),
+      legacySuggestion,
+    ).catch(() => {});
+  }
+  await unlink(legacySuggestionPath).catch(() => {});
 
   let raw = await readJson(configPath);
   if (raw === null) {
@@ -92,6 +105,7 @@ export async function setup(ctx) {
         lastSeenID: null,
         lastSuggestAt: 0,
         suggesting: false,
+        suggestQueued: false,
         turns: 0,
         immuneTurns: config.immuneTurns,
         inFlight: false,
@@ -312,7 +326,15 @@ export async function setup(ctx) {
         const sessionID = event.data?.sessionID;
         if (!sessionID) return;
         await onStepEnded(sessionID);
-        await suggestNext(sessionID);
+        return;
+      }
+      case "session.execution.succeeded":
+      case "session.execution.failed": {
+        const sessionID = event.data?.sessionID;
+        if (!sessionID) return;
+        // The turn is over: this is the context the next message will follow,
+        // so the card gets a fresh prediction now, not from a half-done step.
+        await suggestNext(sessionID, true);
         return;
       }
       default:
@@ -395,11 +417,16 @@ export async function setup(ctx) {
   const SUGGEST_EVERY_MS = 90_000;
 
   /** Writes the panel's suggested next message; never sends it anywhere. */
-  async function suggestNext(sessionID) {
+  async function suggestNext(sessionID, force = false) {
     const state = stateOf(sessionID);
     if (!config.nextPrompt || state.disabled) return;
-    if (state.suggesting) return;
-    if (Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS) return;
+    if (state.suggesting) {
+      // A forced call still runs after the one in flight, not instead of it.
+      if (force) state.suggestQueued = true;
+      return;
+    }
+    if (!force && Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS)
+      return;
     const model = modelRef(config);
     if (!model) return;
 
@@ -457,11 +484,11 @@ export async function setup(ctx) {
       const text = parseSuggestion(answer?.text, config.nextPromptMaxChars);
       if (!text) {
         // The request is satisfied (or needs the person): drop the stale offer.
-        await unlink(suggestionPath).catch(() => {});
+        await unlink(suggestionPathFor(sessionID)).catch(() => {});
         return;
       }
       state.lastSuggestAt = Date.now();
-      await writeJsonAtomic(suggestionPath, {
+      await writeJsonAtomic(suggestionPathFor(sessionID), {
         at: state.lastSuggestAt,
         sessionID,
         text,
@@ -470,6 +497,10 @@ export async function setup(ctx) {
       // A suggestion is a nicety: a failed call leaves the previous one.
     } finally {
       state.suggesting = false;
+      if (state.suggestQueued) {
+        state.suggestQueued = false;
+        void suggestNext(sessionID, true);
+      }
     }
   }
 
@@ -506,8 +537,9 @@ export async function setup(ctx) {
       })
       .catch(() => {});
   };
+  let disposeContextHook = () => {};
   try {
-    await ctx.session.hook("context", (event) => {
+    const hook = await ctx.session.hook("context", (event) => {
       if (!config.nextPrompt || !Array.isArray(event?.system)) return;
       const sessionID = event.sessionID;
       if (!sessionID) return;
@@ -515,6 +547,9 @@ export async function setup(ctx) {
       if (ownedSessions.get(sessionID) === false) return;
       event.system.push({ type: "text", text: nextBlockInstruction(true) });
     });
+    if (typeof hook === "function") disposeContextHook = hook;
+    else if (typeof hook?.dispose === "function")
+      disposeContextHook = () => hook.dispose();
   } catch {
     // An OpenCode release without the context hook: the card is simply absent.
   }
@@ -559,6 +594,11 @@ export async function setup(ctx) {
     }
     sessions.clear();
     ownedSessions.clear();
+    try {
+      disposeContextHook();
+    } catch {
+      // Already disposed with the location.
+    }
   };
 }
 

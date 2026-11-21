@@ -2058,7 +2058,11 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/block/main.js
   var STATE_DIR = "~/.local/state/openchamber-advisor";
   var POLL_MS = 4e3;
-  var DISMISS_KEY = "advisor:next-block-dismissed";
+  var DISMISS_PREFIX = "next-block-dismissed";
+  var ICON_PATH = {
+    check: "M10 15.172l9.192-9.193 1.415 1.414L10 18l-6.364-6.364 1.414-1.414z",
+    close: "M12 10.586l4.95-4.95 1.414 1.414-4.95 4.95 4.95 4.95-1.414 1.414-4.95-4.95-4.95 4.95-1.414-1.414 4.95-4.95-4.95-4.95L7.05 5.636z"
+  };
   function pickBlockSuggestion(suggestions, sessionID, dismissedAt = 0) {
     if (!sessionID) return null;
     let latest = null;
@@ -2079,9 +2083,10 @@ ${GUEST_UI_LOOK_CSS}`;
       suggestion: null,
       dismissedAt: 0
     };
-    const readDismissed = async () => {
+    const dismissKey = (sessionID) => `${DISMISS_PREFIX}:${sessionID ?? "none"}`;
+    const readDismissed = async (sessionID) => {
       try {
-        return Number(await host.storage.get(DISMISS_KEY)) || 0;
+        return Number(await host.storage.get(dismissKey(sessionID))) || 0;
       } catch {
         return 0;
       }
@@ -2097,6 +2102,17 @@ ${GUEST_UI_LOOK_CSS}`;
       void host.setHeight(Math.max(0, height)).catch(() => {
       });
     };
+    const iconButton = (parent, name, label, onClick) => {
+      const holder = element("span", "next-icon");
+      parent.append(holder);
+      mountButton(holder, { label: "", size: "xs", variant: "ghost", onClick });
+      const node = holder.querySelector("button");
+      if (!node) return;
+      node.classList.add("next-icon-btn");
+      node.setAttribute("aria-label", label);
+      node.title = label;
+      node.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="${ICON_PATH[name]}"/></svg>`;
+    };
     function render() {
       root.replaceChildren();
       if (!state.suggestion) {
@@ -2105,34 +2121,23 @@ ${GUEST_UI_LOOK_CSS}`;
         return;
       }
       root.style.display = "block";
-      const box = element("div", "next-card");
-      const head = element("div", "next-head");
-      head.append(element("span", "next-label", "\u0414\u0430\u043B\u044C\u0448\u0435"));
+      const row = element("div", "next-row");
+      const text = element("p", "next-text", state.suggestion.text);
+      text.title = state.suggestion.text;
       const actions = element("div", "next-actions");
-      mountButton(actions, {
-        label: "\u0412 \u0438\u043D\u043F\u0443\u0442",
-        size: "xs",
-        variant: "default",
-        onClick: () => {
-          void host.compose({ text: state.suggestion?.text ?? "" }).catch(() => {
-          });
-        }
+      iconButton(actions, "check", "\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0432 \u043F\u043E\u043B\u0435 \u0432\u0432\u043E\u0434\u0430", () => {
+        void host.compose({ text: state.suggestion?.text ?? "" }).catch(() => {
+        });
       });
-      mountButton(actions, {
-        label: "\u0421\u043A\u0440\u044B\u0442\u044C",
-        size: "xs",
-        variant: "ghost",
-        onClick: () => {
-          state.dismissedAt = state.suggestion?.at ?? Date.now();
-          state.suggestion = null;
-          void host.storage.set(DISMISS_KEY, state.dismissedAt).catch(() => {
-          });
-          render();
-        }
+      iconButton(actions, "close", "\u0421\u043A\u0440\u044B\u0442\u044C \u043F\u043E\u0434\u0441\u043A\u0430\u0437\u043A\u0443", () => {
+        state.dismissedAt = state.suggestion?.at ?? Date.now();
+        state.suggestion = null;
+        void host.storage.set(dismissKey(state.sessionID), state.dismissedAt).catch(() => {
+        });
+        render();
       });
-      head.append(actions);
-      box.append(head, element("p", "next-text", state.suggestion.text));
-      root.append(box);
+      row.append(text, actions);
+      root.append(row);
       resize();
     }
     async function refresh() {
@@ -2166,17 +2171,19 @@ ${GUEST_UI_LOOK_CSS}`;
       state.suggestion = next;
       if (changed) render();
     }
+    async function applySession(sessionID) {
+      state.sessionID = sessionID;
+      state.suggestion = null;
+      state.dismissedAt = await readDismissed(sessionID);
+      render();
+      await refresh();
+    }
     host.onReady((ctx) => {
       applyHostReady(ctx, document.documentElement);
-      state.sessionID = ctx.session?.id ?? null;
-      void readDismissed().then((at) => {
-        state.dismissedAt = Math.max(state.dismissedAt, at);
-        void refresh();
-      });
+      void applySession(ctx.session?.id ?? null);
     });
     host.onSession((session) => {
-      state.sessionID = session?.id ?? null;
-      void refresh();
+      void applySession(session?.id ?? null);
     });
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") void refresh();

@@ -10,45 +10,59 @@
         margin: 0;
         padding: 0;
       }
+      /* The host frames every UI block in a tinted, rounded box. Painting the
+         chat background over it leaves the plain line this card is meant to be,
+         and makes the frame invisible once the card is empty or dismissed. */
       body {
         color: var(--oc-fg);
-        background: transparent;
+        background: var(--oc-bg, transparent);
         font-family: var(--oc-font);
       }
       #root {
         box-sizing: border-box;
-        padding: 2px 0 4px;
+        padding: 0;
       }
-      .next-card {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        padding: 8px 10px;
-        border: 1px solid var(--oc-border);
-        border-radius: var(--oc-radius, 8px);
-        background: var(--oc-muted-surface);
-      }
-      .next-head {
+      .next-row {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 8px;
+        padding: 2px 0 4px;
       }
-      .next-label {
+      .next-text {
+        flex: 1;
+        min-width: 0;
+        margin: 0;
         color: var(--oc-muted);
-        font-size: 0.75rem;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
+        font-size: 0.875rem;
+        font-weight: 400;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .next-actions {
         display: flex;
-        gap: 4px;
+        align-items: center;
+        gap: 2px;
+        flex: none;
       }
-      .next-text {
-        margin: 0;
-        font-size: 0.875rem;
-        font-style: italic;
-        overflow-wrap: anywhere;
+      .next-icon {
+        display: inline-flex;
+      }
+      .oc-sdk-btn.next-icon-btn {
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border-radius: 8px;
+        color: var(--oc-muted);
+        background: transparent;
+      }
+      .oc-sdk-btn.next-icon-btn:hover {
+        color: var(--oc-fg);
+        background: var(--oc-hover);
+      }
+      .oc-sdk-btn.next-icon-btn:focus-visible {
+        outline: 2px solid var(--oc-focus);
+        outline-offset: 1px;
       }
     </style>
   </head>

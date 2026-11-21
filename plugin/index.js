@@ -105,8 +105,10 @@ function journalFileName(locationDir) {
   const digest = createHash("sha256").update(String(locationDir ?? "")).digest("hex");
   return `journal-${digest.slice(0, 8)}.jsonl`;
 }
-function suggestionFileName(locationDir) {
-  return journalFileName(locationDir).replace("journal-", "suggestion-").replace(".jsonl", ".json");
+function suggestionFileName(locationDir, sessionID = "") {
+  const base = journalFileName(locationDir).replace("journal-", "suggestion-").replace(".jsonl", "");
+  const safe = String(sessionID ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+  return safe ? `${base}-${safe}.json` : `${base}.json`;
 }
 
 // src/core/journal.js
@@ -571,9 +573,20 @@ async function setup(ctx) {
   const configPath = join(configDir, "config.json");
   const statusPath = join(stateDir, statusFileName(locationDir));
   const journalPath = join(stateDir, journalFileName(locationDir));
-  const suggestionPath = join(stateDir, suggestionFileName(locationDir));
+  const legacySuggestionPath = join(stateDir, suggestionFileName(locationDir));
+  const suggestionPathFor = (sessionID) => join(stateDir, suggestionFileName(locationDir, sessionID));
   await mkdir2(configDir, { recursive: true });
   await mkdir2(stateDir, { recursive: true });
+  const legacySuggestion = await readJson(legacySuggestionPath);
+  if (legacySuggestion?.sessionID) {
+    await writeJsonAtomic(
+      suggestionPathFor(legacySuggestion.sessionID),
+      legacySuggestion
+    ).catch(() => {
+    });
+  }
+  await unlink(legacySuggestionPath).catch(() => {
+  });
   let raw = await readJson(configPath);
   if (raw === null) {
     raw = { ...DEFAULTS };
@@ -590,6 +603,7 @@ async function setup(ctx) {
         lastSeenID: null,
         lastSuggestAt: 0,
         suggesting: false,
+        suggestQueued: false,
         turns: 0,
         immuneTurns: config.immuneTurns,
         inFlight: false,
@@ -776,7 +790,13 @@ async function setup(ctx) {
         const sessionID = event.data?.sessionID;
         if (!sessionID) return;
         await onStepEnded(sessionID);
-        await suggestNext(sessionID);
+        return;
+      }
+      case "session.execution.succeeded":
+      case "session.execution.failed": {
+        const sessionID = event.data?.sessionID;
+        if (!sessionID) return;
+        await suggestNext(sessionID, true);
         return;
       }
       default:
@@ -840,11 +860,15 @@ async function setup(ctx) {
     if (Object.keys(patch).length > 0) await flush(patch);
   }
   const SUGGEST_EVERY_MS = 9e4;
-  async function suggestNext(sessionID) {
+  async function suggestNext(sessionID, force = false) {
     const state = stateOf(sessionID);
     if (!config.nextPrompt || state.disabled) return;
-    if (state.suggesting) return;
-    if (Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS) return;
+    if (state.suggesting) {
+      if (force) state.suggestQueued = true;
+      return;
+    }
+    if (!force && Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS)
+      return;
     const model = modelRef(config);
     if (!model) return;
     try {
@@ -881,12 +905,12 @@ async function setup(ctx) {
       });
       const text2 = parseSuggestion(answer?.text, config.nextPromptMaxChars);
       if (!text2) {
-        await unlink(suggestionPath).catch(() => {
+        await unlink(suggestionPathFor(sessionID)).catch(() => {
         });
         return;
       }
       state.lastSuggestAt = Date.now();
-      await writeJsonAtomic(suggestionPath, {
+      await writeJsonAtomic(suggestionPathFor(sessionID), {
         at: state.lastSuggestAt,
         sessionID,
         text: text2
@@ -894,6 +918,10 @@ async function setup(ctx) {
     } catch {
     } finally {
       state.suggesting = false;
+      if (state.suggestQueued) {
+        state.suggestQueued = false;
+        void suggestNext(sessionID, true);
+      }
     }
   }
   async function consume(iterable) {
@@ -920,8 +948,10 @@ async function setup(ctx) {
     }).catch(() => {
     });
   };
+  let disposeContextHook = () => {
+  };
   try {
-    await ctx.session.hook("context", (event) => {
+    const hook = await ctx.session.hook("context", (event) => {
       if (!config.nextPrompt || !Array.isArray(event?.system)) return;
       const sessionID = event.sessionID;
       if (!sessionID) return;
@@ -929,6 +959,9 @@ async function setup(ctx) {
       if (ownedSessions.get(sessionID) === false) return;
       event.system.push({ type: "text", text: nextBlockInstruction(true) });
     });
+    if (typeof hook === "function") disposeContextHook = hook;
+    else if (typeof hook?.dispose === "function")
+      disposeContextHook = () => hook.dispose();
   } catch {
   }
   const controller = new AbortController();
@@ -964,6 +997,10 @@ async function setup(ctx) {
     }
     sessions.clear();
     ownedSessions.clear();
+    try {
+      disposeContextHook();
+    } catch {
+    }
   };
 }
 var index_default = { id: "advisor", setup };
