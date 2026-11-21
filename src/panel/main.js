@@ -32,6 +32,7 @@ const state = {
   config: { ...DEFAULTS },
   providers: [],
   suggestion: null,
+  suggestionDismissedAt: 0,
   draft: null,
   message: null,
 }
@@ -444,6 +445,7 @@ function renderSuggestion() {
       label: 'Скрыть',
       variant: 'ghost',
       onClick: () => {
+        state.suggestionDismissedAt = state.suggestion?.at ?? Date.now()
         state.suggestion = null
         renderSuggestion()
       },
@@ -524,7 +526,10 @@ async function updateState() {
     (best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best),
     null,
   )
-  if (latestSuggestion) state.suggestion = latestSuggestion
+  // A dismissed suggestion stays gone until the plugin writes a newer one.
+  if (latestSuggestion && (latestSuggestion.at ?? 0) > state.suggestionDismissedAt) {
+    state.suggestion = latestSuggestion
+  }
   state.records = mergeRecords(journals)
   state.status = statuses.reduce((best, item) => (!best || (item.at ?? 0) > (best.at ?? 0) ? item : best), null)
 }

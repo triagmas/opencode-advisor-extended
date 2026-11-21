@@ -2767,6 +2767,7 @@ ${GUEST_UI_LOOK_CSS}`;
     config: { ...DEFAULTS },
     providers: [],
     suggestion: null,
+    suggestionDismissedAt: 0,
     draft: null,
     message: null
   };
@@ -3114,6 +3115,7 @@ ${GUEST_UI_LOOK_CSS}`;
         label: "\u0421\u043A\u0440\u044B\u0442\u044C",
         variant: "ghost",
         onClick: () => {
+          state.suggestionDismissedAt = state.suggestion?.at ?? Date.now();
           state.suggestion = null;
           renderSuggestion();
         }
@@ -3180,7 +3182,9 @@ ${GUEST_UI_LOOK_CSS}`;
       (best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best,
       null
     );
-    if (latestSuggestion) state.suggestion = latestSuggestion;
+    if (latestSuggestion && (latestSuggestion.at ?? 0) > state.suggestionDismissedAt) {
+      state.suggestion = latestSuggestion;
+    }
     state.records = mergeRecords(journals);
     state.status = statuses.reduce((best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best, null);
   }
