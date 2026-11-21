@@ -667,7 +667,7 @@ git add -A && git commit -m "feat: review loop with severity delivery"
 - Consumes: Task 3 `parseJournal`, Task 5 `isStale`.
 - Produces: `buildJournalView({ records, sessionID, allProjects }): { rows, empty }`; `mergeRecords(files: object[][]): object[]`; `connectionState(status, now): 'live'|'stale'|'missing'`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```js
 // test/panel/view.test.js
@@ -699,25 +699,25 @@ test('состояние связи по heartbeat', () => {
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/panel/view.test.js`
 Expected: FAIL — модуля нет.
 
-- [ ] **Step 3: Реализовать view-модели**
+- [x] **Step 3: Реализовать view-модели**
 
 `buildJournalView` фильтрует по `sessionID` (или все при `allProjects`), сортирует по `at` вниз, возвращает `{ rows, empty: rows.length === 0 }`. `mergeRecords` склеивает и убирает дубли по `at + note`. `connectionState` — `missing`, `live` (< 30 000 мс), `stale`.
 
-- [ ] **Step 4: Реализовать страницу**
+- [x] **Step 4: Реализовать страницу**
 
 `src/panel/main.js`: `connectHost()`, `applyHostReady` в `onReady`, три вкладки, чтение `journal-*.jsonl` и `status-*.json` по `listDir`/`readFile`, опрос раз в 2 000 мс только при `document.visibilityState === 'visible'`, кнопки «в инпут» (`host.compose`), «сохранить» (`writeFile` конфига), бейджи уровней. Разметка — на элементах UI kit; своих цветов нет.
 
-- [ ] **Step 5: Собрать и прогнать тесты**
+- [x] **Step 5: Собрать и прогнать тесты**
 
 Run: `npm run build && node --test test`
 Expected: PASS; `panel/main.js` — IIFE (`grep -c "import " panel/main.js` → 0).
 
-- [ ] **Step 6: Коммит**
+- [x] **Step 6: Коммит**
 
 ```bash
 git add -A && git commit -m "feat: advisor panel with journal, settings and status"

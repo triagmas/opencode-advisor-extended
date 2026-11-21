@@ -83,18 +83,22 @@ import { dirname } from "node:path";
 
 // src/core/journal-format.js
 import { createHash } from "node:crypto";
-var ROTATE_BYTES = 1e6;
-var ROTATE_LINES = 5e3;
-function journalFileName(locationDir) {
-  const digest = createHash("sha256").update(String(locationDir ?? "")).digest("hex");
-  return `journal-${digest.slice(0, 8)}.jsonl`;
-}
+
+// src/core/journal-parse.js
 function countJournalLines(text2) {
   let lines = 0;
   for (const line of String(text2 ?? "").split("\n")) {
     if (line.trim() !== "") lines += 1;
   }
   return lines;
+}
+
+// src/core/journal-format.js
+var ROTATE_BYTES = 1e6;
+var ROTATE_LINES = 5e3;
+function journalFileName(locationDir) {
+  const digest = createHash("sha256").update(String(locationDir ?? "")).digest("hex");
+  return `journal-${digest.slice(0, 8)}.jsonl`;
 }
 
 // src/core/journal.js
