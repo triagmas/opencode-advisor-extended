@@ -396,7 +396,7 @@ git add src/core/status.js test/core/status.test.js && git commit -m "feat: stat
 **Interfaces:**
 - Produces: `shouldReview(session: { parentID?: string, archived?: boolean }): boolean`; `canReview(state, config, now): boolean`; `markReviewed(state, now, turns): void`; `collectDelta(messages, lastSeenID, maxMessages): { messages, lastSeenID }`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```js
 // test/core/scope.test.js
@@ -454,21 +454,21 @@ test('maxMessages оставляет хвост и не теряет lastSeenID'
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/core/scope.test.js test/core/delta.test.js`
 Expected: FAIL — модулей нет.
 
-- [ ] **Step 3: Реализовать модули**
+- [x] **Step 3: Реализовать модули**
 
 `shouldReview` — `!session.parentID && !session.archived`. `canReview` — `config.enabled && !state.inFlight && (state.turns >= state.immuneTurns)`; `markReviewed(state, now, immuneTurns)` ставит `turns = 0`, `immuneTurns`, `inFlight = false`. `collectDelta` — фильтр по индексу после `lastSeenID`, выкидывает `description`, начинающиеся с `advisor:`, и `compaction`, оставляет последние `maxMessages` (0 = все) для модели, а `lastSeenID` ставит по последнему сообщению полного отфильтрованного хвоста — так выпавшие из окна сообщения не ревьюятся дважды.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `node --test test/core/scope.test.js test/core/delta.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add src/core/scope.js src/core/delta.js test/core && git commit -m "feat: session scope, cooldown and transcript delta"
