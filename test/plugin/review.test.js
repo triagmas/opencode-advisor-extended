@@ -227,3 +227,40 @@ test("один и тот же совет не доставляется дваж�
   assert.equal(again.reason, "duplicate");
   assert.equal(ctx.calls.synthetic.length, 1);
 });
+
+test("сбой модели не сдвигает окно: шаги ревьюятся снова", async () => {
+  const ctx = ctxWith('{"severity":"concern","guidance":"проверь край"}');
+  let attempts = 0;
+  ctx.experimental.generate.text = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("timeout");
+    return { text: '{"severity":"concern","guidance":"проверь край"}' };
+  };
+  const state = { lastSeenID: null, turns: 0, inFlight: false, muted: false };
+
+  const failed = await runReview({ ctx, config, sessionID: "s", state, now: 1 });
+  assert.equal(failed.kind, "dropped");
+  assert.equal(failed.reason, "error");
+  assert.equal(state.lastSeenID, null);
+
+  const retried = await runReview({ ctx, config, sessionID: "s", state, now: 2 });
+  assert.equal(retried.kind, "delivered");
+  assert.equal(attempts, 2);
+  assert.equal(state.lastSeenID, "1");
+});
+
+test("пустой ответ двигает окно, чтобы шаг не ревьюился вечно", async () => {
+  const ctx = ctxWith("NO_ADVICE");
+  const state = { lastSeenID: null, turns: 0, inFlight: false, muted: false };
+
+  const result = await runReview({
+    ctx,
+    config,
+    sessionID: "s",
+    state,
+    now: 1,
+  });
+
+  assert.equal(result.reason, "empty");
+  assert.equal(state.lastSeenID, "1");
+});

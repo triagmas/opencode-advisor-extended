@@ -61,3 +61,34 @@ test('ротация по числу строк оставляет бэкап .1
   assert.ok(readFileSync(p + '.1', 'utf8').length > 0)
   assert.equal(parseJournal(readFileSync(p, 'utf8')).length, 1)
 })
+
+test('журнал не перечитывается, пока файл не изменился извне', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-'))
+  const p = join(dir, 'journal-cache.jsonl')
+  let reads = 0
+  const fsOps = {
+    mkdir: async (...args) => (await import('node:fs/promises')).mkdir(...args),
+    stat: async (...args) => (await import('node:fs/promises')).stat(...args),
+    readFile: async (...args) => {
+      reads += 1
+      return (await import('node:fs/promises')).readFile(...args)
+    },
+    rename: async (...args) => (await import('node:fs/promises')).rename(...args),
+    appendFile: async (...args) =>
+      (await import('node:fs/promises')).appendFile(...args),
+  }
+
+  await appendRecord(p, { at: 1 }, fsOps)
+  await appendRecord(p, { at: 2 }, fsOps)
+  assert.equal(reads, 0, 'ни одного чтения: файл создаётся этим процессом')
+
+  writeFileSync(p, readFileSync(p, 'utf8') + '{"at":3}\n')
+  await appendRecord(p, { at: 4 }, fsOps)
+  assert.equal(reads, 1, 'внешняя дозапись заставляет пересчитать строки один раз')
+
+  const rows = readFileSync(p, 'utf8').trim().split('\n')
+  assert.deepEqual(
+    rows.map((line) => JSON.parse(line).at),
+    [1, 2, 3, 4],
+  )
+})

@@ -113,6 +113,7 @@ function suggestionFileName(locationDir, sessionID = "") {
 
 // src/core/journal.js
 var nodeFs = { appendFile, mkdir, readFile, rename, stat };
+var known = /* @__PURE__ */ new Map();
 async function appendRecord(path, record, fsOps = nodeFs) {
   const line = JSON.stringify(record) + "\n";
   const bytes = Buffer.byteLength(line, "utf8");
@@ -122,14 +123,22 @@ async function appendRecord(path, record, fsOps = nodeFs) {
   try {
     const info = await fsOps.stat(path);
     size = info.size;
-    if (size > 0) lines = countJournalLines(await fsOps.readFile(path, "utf8"));
+    if (size > 0) {
+      const cached = known.get(path);
+      lines = cached && cached.size === size ? cached.lines : countJournalLines(await fsOps.readFile(path, "utf8"));
+    }
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
   if (size > 0 && (size + bytes > ROTATE_BYTES || lines >= ROTATE_LINES)) {
-    await fsOps.rename(path, `${path}.1`);
+    await fsOps.rename(path, `${path}.1`).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+    size = 0;
+    lines = 0;
   }
   await fsOps.appendFile(path, line);
+  known.set(path, { size: size + bytes, lines: lines + 1 });
 }
 
 // src/core/providers.js
@@ -511,13 +520,18 @@ async function runReview({
       state.lastSeenID,
       config.maxDeltaMessages
     );
-    state.lastSeenID = delta.lastSeenID;
+    const advance = () => {
+      state.lastSeenID = delta.lastSeenID;
+    };
     if (delta.messages.length === 0)
       return { kind: "skipped", reason: "no-delta" };
     const hasText = delta.messages.some(
       (message) => typeof message.text === "string" && message.text.trim() !== ""
     );
-    if (!hasText) return { kind: "skipped", reason: "no-text" };
+    if (!hasText) {
+      advance();
+      return { kind: "skipped", reason: "no-text" };
+    }
     const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX);
     const prompt = `${REVIEWER_SYSTEM}
 
@@ -533,19 +547,31 @@ ${buildReviewPrompt(transcript)}`;
       return { kind: "dropped", reason: "error", ms: Date.now() - started };
     }
     const ms = Date.now() - started;
-    if (state.disabled || !config.enabled)
+    if (state.disabled || !config.enabled) {
+      advance();
       return { kind: "skipped", reason: "disabled", ms };
-    if (text2 === "" || text2 === NO_ADVICE)
+    }
+    if (text2 === "" || text2 === NO_ADVICE) {
+      advance();
       return { kind: "dropped", reason: "empty", ms };
+    }
     let frame = parseAdviceFrame(text2);
     if (!frame && config.proseFallback)
       frame = { severity: "nit", guidance: text2 };
-    if (!frame) return { kind: "dropped", reason: "unparsed", ms };
+    if (!frame) {
+      advance();
+      return { kind: "dropped", reason: "unparsed", ms };
+    }
     const note = limitText(frame.guidance, config.noteMaxChars);
-    if (note === "") return { kind: "dropped", reason: "empty", ms };
+    if (note === "") {
+      advance();
+      return { kind: "dropped", reason: "empty", ms };
+    }
     const guard = state.guard ??= createEmissionGuard();
-    if (!guard.accept({ severity: frame.severity, note }))
+    if (!guard.accept({ severity: frame.severity, note })) {
+      advance();
       return { kind: "skipped", reason: "duplicate", ms };
+    }
     const delivered = formatNote(frame.severity, note, display);
     try {
       if (frame.severity !== "nit") {
@@ -565,6 +591,7 @@ ${buildReviewPrompt(transcript)}`;
       return { kind: "dropped", reason: "error", ms };
     }
     if (frame.severity !== "nit") markReviewed(state, now, config.immuneTurns);
+    advance();
     return { kind: "delivered", severity: frame.severity, note, ms };
   } finally {
     state.inFlight = false;

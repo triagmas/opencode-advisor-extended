@@ -87,7 +87,12 @@ export async function runReview({
       state.lastSeenID,
       config.maxDeltaMessages,
     );
-    state.lastSeenID = delta.lastSeenID;
+    // The window moves only once the model has answered: a failed call leaves
+    // these steps unseen, and the next step reviews them instead of skipping
+    // them forever. Everything else (including an empty answer) consumed them.
+    const advance = () => {
+      state.lastSeenID = delta.lastSeenID;
+    };
     if (delta.messages.length === 0)
       return { kind: "skipped", reason: "no-delta" };
 
@@ -97,7 +102,10 @@ export async function runReview({
       (message) =>
         typeof message.text === "string" && message.text.trim() !== "",
     );
-    if (!hasText) return { kind: "skipped", reason: "no-text" };
+    if (!hasText) {
+      advance();
+      return { kind: "skipped", reason: "no-text" };
+    }
 
     const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX);
     const prompt = `${REVIEWER_SYSTEM}\n\n${buildReviewPrompt(transcript)}`;
@@ -117,23 +125,35 @@ export async function runReview({
     const ms = Date.now() - started;
 
     // The user may switch the reviewer off while the model is thinking.
-    if (state.disabled || !config.enabled)
+    if (state.disabled || !config.enabled) {
+      advance();
       return { kind: "skipped", reason: "disabled", ms };
-    if (text === "" || text === NO_ADVICE)
+    }
+    if (text === "" || text === NO_ADVICE) {
+      advance();
       return { kind: "dropped", reason: "empty", ms };
+    }
 
     let frame = parseAdviceFrame(text);
     if (!frame && config.proseFallback)
       frame = { severity: "nit", guidance: text };
-    if (!frame) return { kind: "dropped", reason: "unparsed", ms };
+    if (!frame) {
+      advance();
+      return { kind: "dropped", reason: "unparsed", ms };
+    }
 
     const note = limitText(frame.guidance, config.noteMaxChars);
-    if (note === "") return { kind: "dropped", reason: "empty", ms };
+    if (note === "") {
+      advance();
+      return { kind: "dropped", reason: "empty", ms };
+    }
 
     // The same advice never reaches the agent twice; an escalation still does.
     const guard = (state.guard ??= createEmissionGuard());
-    if (!guard.accept({ severity: frame.severity, note }))
+    if (!guard.accept({ severity: frame.severity, note })) {
+      advance();
       return { kind: "skipped", reason: "duplicate", ms };
+    }
 
     const delivered = formatNote(frame.severity, note, display);
     try {
@@ -155,6 +175,7 @@ export async function runReview({
     }
 
     if (frame.severity !== "nit") markReviewed(state, now, config.immuneTurns);
+    advance();
 
     return { kind: "delivered", severity: frame.severity, note, ms };
   } finally {
