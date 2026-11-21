@@ -85,3 +85,32 @@ test('шаг сессии из другого location не ревьюится',
 
   await dispose()
 })
+
+test('две сессии в одном потоке: ревьюится только своя', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
+  mkdirSync(join(dir, 'config'), { recursive: true })
+  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
+
+  const ctx = ctxFor(dir, '{"severity":"concern","guidance":"совет"}')
+  ctx.event = {
+    subscribe: () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'session.step.ended', data: { sessionID: 'own' } }
+        yield { type: 'session.step.ended', data: { sessionID: 'foreign' } }
+      },
+    }),
+  }
+  const dirs = { own: '/proj', foreign: '/other' }
+  ctx.session.get = async ({ sessionID }) => ({ time: { created: 1 }, location: { directory: dirs[sessionID] } })
+
+  const dispose = await plugin.setup(ctx)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+
+  const stateDir = join(dir, 'state')
+  const journal = readdirSync(stateDir).find((name) => name.endsWith('.jsonl'))
+  const rows = readFileSync(join(stateDir, journal), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  assert.deepEqual(rows.map((row) => row.sessionID), ['own'])
+  assert.equal(ctx.synthetics.length, 1)
+
+  await dispose()
+})
