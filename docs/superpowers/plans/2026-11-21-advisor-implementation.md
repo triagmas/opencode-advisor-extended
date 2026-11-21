@@ -280,7 +280,7 @@ git add src/core/journal.js test/core/journal.test.js && git commit -m "feat: ap
 **Interfaces:**
 - Produces: `DEFAULTS`; `normalizeConfig(raw: unknown): { config, errors: string[] }`; `modelRef(config): { providerID, modelID } | null`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```js
 // test/core/config.test.js
@@ -312,21 +312,21 @@ test('границы значений зажимаются', () => {
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/core/config.test.js`
 Expected: FAIL — модуля нет.
 
-- [ ] **Step 3: Реализовать модуль**
+- [x] **Step 3: Реализовать модуль**
 
 `DEFAULTS = { enabled: true, provider: '', model: '', immuneTurns: 3, maxDeltaMessages: 60, noteMaxChars: 768, proseFallback: false }`. `normalizeConfig` берёт только известные ключи, числа зажимает (immuneTurns 0–50, noteMaxChars 128–4096, maxDeltaMessages 0–500), булевы приводит, `errors` получает `model-missing`, если `provider` или `model` пустые.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `node --test test/core/config.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Коммит**
+- [x] **Step 5: Коммит**
 
 ```bash
 git add src/core/config.js test/core/config.test.js && git commit -m "feat: config defaults and model gate"
