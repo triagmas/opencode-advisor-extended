@@ -12,7 +12,7 @@ export function shouldReview(session) {
  */
 export function canReview(state, config, _now = Date.now()) {
   if (!config?.enabled) return false
-  if (!state || state.disabled) return false
+  if (!state || state.disabled || state.muted) return false
   if (state.inFlight) return false
   return (state.turns ?? 0) >= (state.immuneTurns ?? 0)
 }

@@ -1,8 +1,8 @@
 // src/plugin/index.js
 import { watch } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir as mkdir2, readFile as readFile2, rename as rename2, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname as dirname2, join, resolve } from "node:path";
 
 // src/core/command.js
 var USAGE = { kind: "usage" };
@@ -77,11 +77,45 @@ function modelRef(config) {
   return { providerID, modelID };
 }
 
+// src/core/journal.js
+import { appendFile, mkdir, readFile, rename, stat } from "node:fs/promises";
+import { dirname } from "node:path";
+
 // src/core/journal-format.js
 import { createHash } from "node:crypto";
+var ROTATE_BYTES = 1e6;
+var ROTATE_LINES = 5e3;
 function journalFileName(locationDir) {
   const digest = createHash("sha256").update(String(locationDir ?? "")).digest("hex");
   return `journal-${digest.slice(0, 8)}.jsonl`;
+}
+function countJournalLines(text2) {
+  let lines = 0;
+  for (const line of String(text2 ?? "").split("\n")) {
+    if (line.trim() !== "") lines += 1;
+  }
+  return lines;
+}
+
+// src/core/journal.js
+var nodeFs = { appendFile, mkdir, readFile, rename, stat };
+async function appendRecord(path, record, fsOps = nodeFs) {
+  const line = JSON.stringify(record) + "\n";
+  const bytes = Buffer.byteLength(line, "utf8");
+  await fsOps.mkdir(dirname(path), { recursive: true });
+  let size = 0;
+  let lines = 0;
+  try {
+    const info = await fsOps.stat(path);
+    size = info.size;
+    if (size > 0) lines = countJournalLines(await fsOps.readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  if (size > 0 && (size + bytes > ROTATE_BYTES || lines >= ROTATE_LINES)) {
+    await fsOps.rename(path, `${path}.1`);
+  }
+  await fsOps.appendFile(path, line);
 }
 
 // src/core/limits.js
@@ -94,6 +128,26 @@ function limitText(text2, max) {
   const space = hard.lastIndexOf(" ");
   const cut = space > hard.length / 2 ? hard.slice(0, space) : hard;
   return cut.replace(/\s+$/, "") + ELLIPSIS;
+}
+
+// src/core/scope.js
+function shouldReview(session) {
+  if (!session) return false;
+  if (session.parentID) return false;
+  if (session.archived) return false;
+  return true;
+}
+function canReview(state, config, _now = Date.now()) {
+  if (!config?.enabled) return false;
+  if (!state || state.disabled || state.muted) return false;
+  if (state.inFlight) return false;
+  return (state.turns ?? 0) >= (state.immuneTurns ?? 0);
+}
+function markReviewed(state, now, immuneTurns) {
+  state.turns = 0;
+  state.immuneTurns = immuneTurns;
+  state.inFlight = false;
+  state.cooldownUntil = now;
 }
 
 // src/core/status.js
@@ -119,11 +173,153 @@ function statusFileName(locationDir) {
   return `status-${digest.slice(0, 8)}.json`;
 }
 
+// src/core/delta.js
+function isOwnRecord(message) {
+  const description = typeof message?.description === "string" ? message.description : "";
+  return description.startsWith("advisor:");
+}
+function isCompaction(message) {
+  if (message?.role === "compaction" || message?.type === "compaction") return true;
+  const description = typeof message?.description === "string" ? message.description : "";
+  return description === "compaction" || description.startsWith("compaction:");
+}
+function collectDelta(messages, lastSeenID, maxMessages) {
+  const list = Array.isArray(messages) ? messages : [];
+  let start = 0;
+  if (lastSeenID != null) {
+    const index = list.findIndex((message) => message?.id === lastSeenID);
+    start = index === -1 ? 0 : index + 1;
+  }
+  const fresh = list.slice(start).filter((message) => !isOwnRecord(message) && !isCompaction(message));
+  const lastID = fresh.length > 0 ? fresh[fresh.length - 1].id : lastSeenID ?? null;
+  const window = typeof maxMessages === "number" && maxMessages > 0 ? fresh.slice(-maxMessages) : fresh;
+  return { messages: window, lastSeenID: lastID };
+}
+
+// src/core/frame.js
+var SEVERITIES = ["nit", "concern", "blocker"];
+function parseAdviceFrame(text2) {
+  const value = typeof text2 === "string" ? text2 : "";
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  let frame;
+  try {
+    frame = JSON.parse(value.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!frame || typeof frame !== "object") return null;
+  if (!SEVERITIES.includes(frame.severity)) return null;
+  if (typeof frame.guidance !== "string" || frame.guidance.trim() === "") return null;
+  return { severity: frame.severity, guidance: frame.guidance.trim() };
+}
+
+// src/plugin/prompts.js
+var REVIEWER_SYSTEM = `\u0422\u044B \u2014 \u0440\u0435\u0432\u044C\u044E\u0435\u0440 \u0445\u043E\u0434\u0430 \u0430\u0433\u0435\u043D\u0442\u0430 \u0432 \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0435 \u043A\u043E\u0434\u0430. \u0422\u0435\u0431\u0435 \u0434\u0430\u044E\u0442 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F \u0441\u0435\u0441\u0441\u0438\u0438: \u0447\u0442\u043E \u043F\u0440\u043E\u0441\u0438\u043B \u0447\u0435\u043B\u043E\u0432\u0435\u043A, \u0447\u0442\u043E \u043E\u0442\u0432\u0435\u0442\u0438\u043B \u0430\u0433\u0435\u043D\u0442 \u0438 \u043A\u0430\u043A\u0438\u0435 \u0432\u044B\u0437\u043E\u0432\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u043E\u043D \u0441\u0434\u0435\u043B\u0430\u043B.
+
+\u0414\u0430\u0439 \u043E\u0434\u0438\u043D \u043A\u043E\u0440\u043E\u0442\u043A\u0438\u0439 \u0441\u043E\u0432\u0435\u0442 \u0430\u0433\u0435\u043D\u0442\u0443 \u2014 \u043D\u0435 \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0443. \u041D\u0435 \u043F\u0435\u0440\u0435\u0441\u043A\u0430\u0437\u044B\u0432\u0430\u0439 \u0441\u0434\u0435\u043B\u0430\u043D\u043D\u043E\u0435, \u043D\u0435 \u0445\u0432\u0430\u043B\u0438, \u043D\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u0443\u0439 \u0438 \u043D\u0435 \u043F\u0440\u043E\u0441\u0438 \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432.
+
+\u0423\u0440\u043E\u0432\u043D\u0438 \u0432\u0430\u0436\u043D\u043E\u0441\u0442\u0438:
+- "nit" \u2014 \u043C\u0435\u043B\u043E\u0447\u044C \u0438\u043B\u0438 \u0443\u043B\u0443\u0447\u0448\u0435\u043D\u0438\u0435, \u0430\u0433\u0435\u043D\u0442 \u043C\u043E\u0436\u0435\u0442 \u043F\u0440\u043E\u0434\u043E\u043B\u0436\u0430\u0442\u044C;
+- "concern" \u2014 \u0432\u0435\u0440\u043E\u044F\u0442\u043D\u0430\u044F \u043E\u0448\u0438\u0431\u043A\u0430 \u0438\u043B\u0438 \u043F\u0440\u043E\u043F\u0443\u0449\u0435\u043D\u043D\u043E\u0435 \u0442\u0440\u0435\u0431\u043E\u0432\u0430\u043D\u0438\u0435, \u0441\u0442\u043E\u0438\u0442 \u043F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C \u0441\u0435\u0439\u0447\u0430\u0441;
+- "blocker" \u2014 \u0430\u0433\u0435\u043D\u0442 \u0434\u0432\u0438\u0436\u0435\u0442\u0441\u044F \u043D\u0435 \u0442\u0443\u0434\u0430 \u0438\u043B\u0438 \u0441\u043B\u043E\u043C\u0430\u0435\u0442 \u0440\u0430\u0431\u043E\u0442\u0443, \u043E\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0441\u044C \u0438 \u0438\u0441\u043F\u0440\u0430\u0432\u044C.
+
+\u041E\u0442\u0432\u0435\u0442 \u2014 \u0440\u043E\u0432\u043D\u043E \u043E\u0434\u0438\u043D JSON-\u043E\u0431\u044A\u0435\u043A\u0442 \u0431\u0435\u0437 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u0438\u0439 \u0438 \u0431\u0435\u0437 markdown:
+{"severity":"nit|concern|blocker","guidance":"\u043E\u0434\u043D\u043E-\u0434\u0432\u0430 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0435\u043D\u0438\u044F \u043F\u043E-\u0440\u0443\u0441\u0441\u043A\u0438"}
+
+\u0415\u0441\u043B\u0438 \u0441\u043E\u0432\u0435\u0442\u043E\u0432\u0430\u0442\u044C \u043D\u0435\u0447\u0435\u0433\u043E, \u043E\u0442\u0432\u0435\u0442\u044C \u0440\u043E\u0432\u043D\u043E: NO_ADVICE`;
+function buildReviewPrompt(transcript) {
+  return `\u0421\u0435\u0441\u0441\u0438\u044F, \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0435 \u0445\u043E\u0434\u044B:
+
+${transcript}
+
+\u041E\u0446\u0435\u043D\u0438 \u0445\u043E\u0434 \u0430\u0433\u0435\u043D\u0442\u0430 \u0438 \u0432\u0435\u0440\u043D\u0438 JSON-\u043A\u0430\u0434\u0440 \u0441\u043E\u0432\u0435\u0442\u0430.`;
+}
+
+// src/plugin/review.js
+var DELTA_MAX = 16e3;
+var NOTE_KEY = "advisor-note";
+var NO_ADVICE = "NO_ADVICE";
+function messageText(message) {
+  if (Array.isArray(message?.content)) {
+    return message.content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+  }
+  return typeof message?.text === "string" ? message.text : "";
+}
+function toDeltaMessage(message) {
+  return {
+    id: message?.id,
+    role: message?.type ?? message?.role ?? "user",
+    text: messageText(message),
+    description: message?.description
+  };
+}
+function transcriptOf(messages) {
+  return messages.map((message) => `${message.role}: ${message.text}`).join("\n\n");
+}
+async function runReview({ ctx, config, sessionID, state, now = Date.now() }) {
+  const model = modelRef(config);
+  if (!model) return { kind: "skipped", reason: "model-missing" };
+  if (state.inFlight) return { kind: "skipped", reason: "busy" };
+  state.inFlight = true;
+  const started = Date.now();
+  try {
+    let rawMessages;
+    try {
+      rawMessages = await ctx.session.context({ sessionID });
+    } catch {
+      return { kind: "dropped", reason: "error", ms: Date.now() - started };
+    }
+    const messages = (Array.isArray(rawMessages) ? rawMessages : []).map(toDeltaMessage);
+    const delta = collectDelta(messages, state.lastSeenID, config.maxDeltaMessages);
+    state.lastSeenID = delta.lastSeenID;
+    if (delta.messages.length === 0) return { kind: "skipped", reason: "no-delta" };
+    const transcript = limitText(transcriptOf(delta.messages), DELTA_MAX);
+    const prompt = `${REVIEWER_SYSTEM}
+
+${buildReviewPrompt(transcript)}`;
+    let text2;
+    try {
+      const answer = await ctx.experimental.generate.text({ model, prompt });
+      text2 = typeof answer?.text === "string" ? answer.text.trim() : "";
+    } catch {
+      return { kind: "dropped", reason: "error", ms: Date.now() - started };
+    }
+    const ms = Date.now() - started;
+    if (state.disabled || !config.enabled) return { kind: "skipped", reason: "disabled", ms };
+    if (text2 === "" || text2 === NO_ADVICE) return { kind: "dropped", reason: "empty", ms };
+    let frame = parseAdviceFrame(text2);
+    if (!frame && config.proseFallback) frame = { severity: "nit", guidance: text2 };
+    if (!frame) return { kind: "dropped", reason: "unparsed", ms };
+    const note = limitText(frame.guidance, config.noteMaxChars);
+    if (note === "") return { kind: "dropped", reason: "empty", ms };
+    const delivered = `[advisor:${frame.severity}] ${note}`;
+    try {
+      if (frame.severity !== "nit") {
+        await ctx.session.synthetic({
+          sessionID,
+          text: delivered,
+          description: `advisor:${frame.severity}`,
+          delivery: "steer"
+        });
+      }
+      await ctx.session.instructions?.entry?.put({ sessionID, key: NOTE_KEY, value: delivered });
+    } catch {
+      return { kind: "dropped", reason: "error", ms };
+    }
+    if (frame.severity !== "nit") markReviewed(state, now, config.immuneTurns);
+    return { kind: "delivered", severity: frame.severity, note, ms };
+  } finally {
+    state.inFlight = false;
+  }
+}
+
 // src/plugin/index.js
 var PLUGIN_VERSION = "0.1.0";
 var HEARTBEAT_MS = 1e4;
 var ANSWER_MAX = 500;
-var NOTE_KEY = "advisor-note";
+var NOTE_KEY2 = "advisor-note";
 var EVENT_TYPES = [
   "session.step.started",
   "session.step.ended",
@@ -137,17 +333,17 @@ function modelLabel(config) {
 }
 async function readJson(path) {
   try {
-    return JSON.parse(await readFile(path, "utf8"));
+    return JSON.parse(await readFile2(path, "utf8"));
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     return {};
   }
 }
 async function writeJsonAtomic(path, value) {
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir2(dirname2(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
   await writeFile(temp, JSON.stringify(value, null, 2) + "\n");
-  await rename(temp, path);
+  await rename2(temp, path);
 }
 async function setup(ctx) {
   const options = ctx.options ?? {};
@@ -158,8 +354,8 @@ async function setup(ctx) {
   const configPath = join(configDir, "config.json");
   const statusPath = join(stateDir, statusFileName(locationDir));
   const journalPath = join(stateDir, journalFileName(locationDir));
-  await mkdir(configDir, { recursive: true });
-  await mkdir(stateDir, { recursive: true });
+  await mkdir2(configDir, { recursive: true });
+  await mkdir2(stateDir, { recursive: true });
   let raw = await readJson(configPath);
   if (raw === null) {
     raw = { ...DEFAULTS };
@@ -172,7 +368,7 @@ async function setup(ctx) {
   const stateOf = (sessionID) => {
     let state = sessions.get(sessionID);
     if (!state) {
-      state = { lastSeenID: null, turns: 0, immuneTurns: config.immuneTurns, inFlight: false, disabled: false, cooldownUntil: 0 };
+      state = { lastSeenID: null, turns: 0, immuneTurns: config.immuneTurns, inFlight: false, disabled: false, muted: false, cooldownUntil: 0 };
       sessions.set(sessionID, state);
     }
     return state;
@@ -205,7 +401,10 @@ async function setup(ctx) {
     applied = normalizeConfig(fresh);
     config = applied.config;
     errors = applied.errors;
-    for (const state of sessions.values()) state.immuneTurns = config.immuneTurns;
+    for (const state of sessions.values()) {
+      state.immuneTurns = config.immuneTurns;
+      state.muted = false;
+    }
     await flush({ enabled: config.enabled, model: modelLabel(config), reason: errors[0] ?? null });
   }
   let watcher;
@@ -226,12 +425,13 @@ async function setup(ctx) {
     const missing = errors.includes("model-missing") ? " \u041C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0437\u0430\u0434\u0430\u043D\u0430 (model-missing): \u0443\u043A\u0430\u0436\u0438\u0442\u0435 provider/model \u0432 \u043F\u0430\u043D\u0435\u043B\u0438 \u0438\u043B\u0438 /advisor model set <provider>/<model>." : "";
     return limitText(`Advisor: ${body}${missing}`, ANSWER_MAX);
   };
-  function statusLine() {
+  function statusLine(session) {
     const state = config.enabled ? "\u0432\u043A\u043B\u044E\u0447\u0451\u043D" : "\u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D";
     const model = modelLabel(config) ?? "\u043D\u0435\u0442 (model-missing)";
     const last = status.lastAdviceAt ? new Date(status.lastAdviceAt).toLocaleTimeString() : "\u0441\u043E\u0432\u0435\u0442\u043E\u0432 \u0435\u0449\u0451 \u043D\u0435 \u0431\u044B\u043B\u043E";
     const latency = typeof status.lastMs === "number" ? `${status.lastMs} \u043C\u0441` : "\u2014";
-    return `\u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435: ${state}; \u043C\u043E\u0434\u0435\u043B\u044C: ${model}; \u0432\u044B\u0437\u043E\u0432\u043E\u0432: ${status.calls}; \u0434\u0440\u043E\u043F\u043E\u0432: ${status.drops.empty + status.drops.unparsed + status.drops.error}; \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u044F\u044F \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430: ${latency}; ${last}`;
+    const mute = session?.disabled ? "\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D\u0430" : session?.muted ? "\u043C\u043E\u043B\u0447\u0438\u0442 \u043F\u043E\u0441\u043B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438 \u043C\u043E\u0434\u0435\u043B\u0438" : "\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u0430";
+    return `\u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435: ${state}, ${mute}; \u043C\u043E\u0434\u0435\u043B\u044C: ${model}; \u0432\u044B\u0437\u043E\u0432\u043E\u0432: ${status.calls}; \u0434\u0440\u043E\u043F\u043E\u0432: ${status.drops.empty + status.drops.unparsed + status.drops.error}; \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430: ${latency}; ${last}`;
   }
   async function runCommand({ sessionID, prompt }) {
     const parsed = parseCommand(prompt?.text ?? "");
@@ -244,6 +444,7 @@ async function setup(ctx) {
         break;
       case "on":
         state.disabled = false;
+        state.muted = false;
         text2 = reply("\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u0430");
         break;
       case "off":
@@ -251,7 +452,7 @@ async function setup(ctx) {
         text2 = reply("\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D\u0430");
         break;
       case "status":
-        text2 = reply(statusLine());
+        text2 = reply(statusLine(state));
         break;
       case "model-set":
         await patchConfig({ provider: parsed.providerID, model: parsed.modelID });
@@ -271,7 +472,7 @@ async function setup(ctx) {
   });
   async function clearNote(sessionID) {
     try {
-      await ctx.session.instructions?.entry?.remove({ sessionID, key: NOTE_KEY });
+      await ctx.session.instructions?.entry?.remove({ sessionID, key: NOTE_KEY2 });
     } catch {
     }
   }
@@ -293,7 +494,54 @@ async function setup(ctx) {
       default:
     }
   }
-  async function onStepEnded(_sessionID) {
+  async function onStepEnded(sessionID) {
+    const state = stateOf(sessionID);
+    if (state.inFlight) return;
+    if (!canReview(state, config, Date.now())) return;
+    let info = null;
+    try {
+      info = await ctx.session.get({ sessionID });
+    } catch {
+      info = null;
+    }
+    const archived = Boolean(info?.time?.archived ?? info?.archived);
+    if (info && !shouldReview({ parentID: info.parentID, archived })) return;
+    if (state.inFlight) return;
+    const started = Date.now();
+    const result = await runReview({ ctx, config, sessionID, state, now: started });
+    const patch = {};
+    if (result.kind !== "skipped") {
+      counters.calls += 1;
+      patch.calls = counters.calls;
+    }
+    if (result.kind === "dropped") {
+      const reason = result.reason === "empty" || result.reason === "unparsed" || result.reason === "error" ? result.reason : "error";
+      counters.drops[reason] += 1;
+      patch.drops = { ...counters.drops };
+      if (reason === "error") state.muted = true;
+    }
+    if (result.kind === "delivered") {
+      lastAdviceAt = Date.now();
+      lastMs = result.ms ?? null;
+      cooldownUntil = state.cooldownUntil;
+      patch.lastAdviceAt = lastAdviceAt;
+      patch.lastMs = lastMs;
+      patch.cooldownUntil = cooldownUntil;
+      try {
+        await appendRecord(journalPath, {
+          kind: "advice",
+          at: lastAdviceAt,
+          sessionID,
+          project: locationDir,
+          severity: result.severity,
+          note: result.note,
+          model: modelLabel(config),
+          ms: lastMs
+        });
+      } catch {
+      }
+    }
+    if (Object.keys(patch).length > 0) await flush(patch);
   }
   async function consume(iterable) {
     try {

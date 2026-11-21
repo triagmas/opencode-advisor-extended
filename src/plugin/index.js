@@ -5,9 +5,12 @@ import { dirname, join, resolve } from 'node:path'
 
 import { parseCommand } from '../core/command.js'
 import { DEFAULTS, modelRef, normalizeConfig } from '../core/config.js'
+import { appendRecord } from '../core/journal.js'
 import { journalFileName } from '../core/journal-format.js'
 import { limitText } from '../core/limits.js'
+import { canReview, shouldReview } from '../core/scope.js'
 import { buildStatus, emptyCounters, statusFileName } from '../core/status.js'
+import { runReview } from './review.js'
 
 export const PLUGIN_VERSION = '0.1.0'
 
@@ -79,7 +82,7 @@ export async function setup(ctx) {
   const stateOf = (sessionID) => {
     let state = sessions.get(sessionID)
     if (!state) {
-      state = { lastSeenID: null, turns: 0, immuneTurns: config.immuneTurns, inFlight: false, disabled: false, cooldownUntil: 0 }
+      state = { lastSeenID: null, turns: 0, immuneTurns: config.immuneTurns, inFlight: false, disabled: false, muted: false, cooldownUntil: 0 }
       sessions.set(sessionID, state)
     }
     return state
@@ -116,7 +119,11 @@ export async function setup(ctx) {
     applied = normalizeConfig(fresh)
     config = applied.config
     errors = applied.errors
-    for (const state of sessions.values()) state.immuneTurns = config.immuneTurns
+    for (const state of sessions.values()) {
+      state.immuneTurns = config.immuneTurns
+      // A config edit is one of the two ways out of a model-error silence.
+      state.muted = false
+    }
     await flush({ enabled: config.enabled, model: modelLabel(config), reason: errors[0] ?? null })
   }
 
@@ -143,12 +150,13 @@ export async function setup(ctx) {
     return limitText(`Advisor: ${body}${missing}`, ANSWER_MAX)
   }
 
-  function statusLine() {
+  function statusLine(session) {
     const state = config.enabled ? 'включён' : 'выключен'
     const model = modelLabel(config) ?? 'нет (model-missing)'
     const last = status.lastAdviceAt ? new Date(status.lastAdviceAt).toLocaleTimeString() : 'советов ещё не было'
     const latency = typeof status.lastMs === 'number' ? `${status.lastMs} мс` : '—'
-    return `состояние: ${state}; модель: ${model}; вызовов: ${status.calls}; дропов: ${status.drops.empty + status.drops.unparsed + status.drops.error}; последняя задержка: ${latency}; ${last}`
+    const mute = session?.disabled ? 'сессия выключена' : session?.muted ? 'молчит после ошибки модели' : 'сессия включена'
+    return `состояние: ${state}, ${mute}; модель: ${model}; вызовов: ${status.calls}; дропов: ${status.drops.empty + status.drops.unparsed + status.drops.error}; задержка: ${latency}; ${last}`
   }
 
   async function runCommand({ sessionID, prompt }) {
@@ -163,6 +171,7 @@ export async function setup(ctx) {
         break
       case 'on':
         state.disabled = false
+        state.muted = false
         text = reply('сессия включена')
         break
       case 'off':
@@ -170,7 +179,7 @@ export async function setup(ctx) {
         text = reply('сессия выключена')
         break
       case 'status':
-        text = reply(statusLine())
+        text = reply(statusLine(state))
         break
       case 'model-set':
         await patchConfig({ provider: parsed.providerID, model: parsed.modelID })
@@ -218,8 +227,62 @@ export async function setup(ctx) {
     }
   }
 
-  // Filled in by the review task; the step loop keeps running without it.
-  async function onStepEnded(_sessionID) {}
+  async function onStepEnded(sessionID) {
+    const state = stateOf(sessionID)
+    if (state.inFlight) return
+    if (!canReview(state, config, Date.now())) return
+
+    let info = null
+    try {
+      info = await ctx.session.get({ sessionID })
+    } catch {
+      info = null
+    }
+    const archived = Boolean(info?.time?.archived ?? info?.archived)
+    if (info && !shouldReview({ parentID: info.parentID, archived })) return
+    if (state.inFlight) return
+
+    const started = Date.now()
+    const result = await runReview({ ctx, config, sessionID, state, now: started })
+
+    const patch = {}
+    if (result.kind !== 'skipped') {
+      counters.calls += 1
+      patch.calls = counters.calls
+    }
+
+    if (result.kind === 'dropped') {
+      const reason = result.reason === 'empty' || result.reason === 'unparsed' || result.reason === 'error' ? result.reason : 'error'
+      counters.drops[reason] += 1
+      patch.drops = { ...counters.drops }
+      if (reason === 'error') state.muted = true
+    }
+
+    if (result.kind === 'delivered') {
+      lastAdviceAt = Date.now()
+      lastMs = result.ms ?? null
+      cooldownUntil = state.cooldownUntil
+      patch.lastAdviceAt = lastAdviceAt
+      patch.lastMs = lastMs
+      patch.cooldownUntil = cooldownUntil
+      try {
+        await appendRecord(journalPath, {
+          kind: 'advice',
+          at: lastAdviceAt,
+          sessionID,
+          project: locationDir,
+          severity: result.severity,
+          note: result.note,
+          model: modelLabel(config),
+          ms: lastMs,
+        })
+      } catch {
+        // A broken journal must not break the review loop.
+      }
+    }
+
+    if (Object.keys(patch).length > 0) await flush(patch)
+  }
 
   async function consume(iterable) {
     try {

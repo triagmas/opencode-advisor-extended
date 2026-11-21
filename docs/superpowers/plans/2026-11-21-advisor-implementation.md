@@ -566,7 +566,7 @@ git add src/plugin src/core/command.js test && git commit -m "feat: plugin skele
 - Consumes: Task 2 `limitText`/`parseAdviceFrame`, Task 6 `collectDelta`.
 - Produces: `runReview({ ctx, config, sessionID, state, now }): Promise<{ kind: 'delivered'|'skipped'|'dropped', severity?, reason? }>`.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 ```js
 // test/plugin/review.test.js
@@ -628,28 +628,28 @@ test('proseFallback доставляет прозу как nit', async () => {
 })
 ```
 
-- [ ] **Step 2: Запустить, убедиться что падает**
+- [x] **Step 2: Запустить, убедиться что падает**
 
 Run: `node --test test/plugin/review.test.js`
 Expected: FAIL — модуля нет.
 
-- [ ] **Step 3: Реализовать `runReview` и тексты промптов**
+- [x] **Step 3: Реализовать `runReview` и тексты промптов**
 
 `runReview`: `collectDelta`, один `experimental.generate.text`, `limitText` до отправки дельты (≈16 000 знаков), `parseAdviceFrame`; если кадр не разобрался и `proseFallback` включён — взять ответ как есть с уровнем `nit`; проверка `state.disabled` **после** ответа, обрезка `noteMaxChars`, доставка: `nit` → `instructions.entry.put({ sessionID, key: 'advisor-note', value })`; иначе `synthetic({ sessionID, text: '[advisor:severity] ' + note, description: 'advisor:' + severity, delivery: 'steer' })` плюс entry; вернуть результат.
 
 `prompts.js` — `REVIEWER_SYSTEM` (роль, три уровня, требование JSON-кадра, запрет на команды) и `buildReviewPrompt(deltaText)`.
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `node --test test/plugin/review.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Подключить в каркас и проверить сборку**
+- [x] **Step 5: Подключить в каркас и проверить сборку**
 
 Run: `npm run build && node --test test`
 Expected: PASS; `plugin/index.js` собирается без внешних импортов (`grep -c "from '" plugin/index.js` → 0).
 
-- [ ] **Step 6: Коммит**
+- [x] **Step 6: Коммит**
 
 ```bash
 git add -A && git commit -m "feat: review loop with severity delivery"
