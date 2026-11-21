@@ -163,16 +163,27 @@ const tabs = mountTabs(tabsHost, {
 
 // --- rendering ------------------------------------------------------------
 
+let journalSignature = ''
+
 function renderJournal() {
   const view = buildJournalView({
     records: state.records,
     sessionID: state.sessionID,
     allProjects: state.allProjects,
   })
+  const connection = connectionState(state.status, Date.now())
+
+  // Polling every two seconds must not rebuild the list under the reader.
+  const signature = JSON.stringify([
+    connection,
+    view.rows.map((row) => [row.at, row.severity, row.note]),
+  ])
+  if (signature === journalSignature) return
+  journalSignature = signature
 
   journalRows.replaceChildren()
 
-  if (view.rows.length === 0 && connectionState(state.status, Date.now()) !== 'live') {
+  if (view.rows.length === 0 && connection !== 'live') {
     mountEmpty(journalRows, {
       title: 'Плагин не запущен',
       body: 'Нет heartbeat. Проверьте, что OpenCode работает и расширение включено.',

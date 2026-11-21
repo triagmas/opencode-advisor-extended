@@ -2610,14 +2610,22 @@ ${GUEST_UI_LOOK_CSS}`;
       render();
     }
   });
+  var journalSignature = "";
   function renderJournal() {
     const view = buildJournalView({
       records: state.records,
       sessionID: state.sessionID,
       allProjects: state.allProjects
     });
+    const connection = connectionState(state.status, Date.now());
+    const signature = JSON.stringify([
+      connection,
+      view.rows.map((row) => [row.at, row.severity, row.note])
+    ]);
+    if (signature === journalSignature) return;
+    journalSignature = signature;
     journalRows.replaceChildren();
-    if (view.rows.length === 0 && connectionState(state.status, Date.now()) !== "live") {
+    if (view.rows.length === 0 && connection !== "live") {
       mountEmpty(journalRows, {
         title: "\u041F\u043B\u0430\u0433\u0438\u043D \u043D\u0435 \u0437\u0430\u043F\u0443\u0449\u0435\u043D",
         body: "\u041D\u0435\u0442 heartbeat. \u041F\u0440\u043E\u0432\u0435\u0440\u044C\u0442\u0435, \u0447\u0442\u043E OpenCode \u0440\u0430\u0431\u043E\u0442\u0430\u0435\u0442 \u0438 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u0438\u0435 \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u043E."
