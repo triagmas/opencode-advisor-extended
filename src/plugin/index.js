@@ -100,6 +100,9 @@ export async function setup(ctx) {
     model: modelLabel(config),
     reason: errors[0] ?? null,
     appVersion: ctx.app?.version ?? null,
+    lastAdviceAt: null,
+    lastMs: null,
+    cooldownUntil: null,
   })
 
   const heartbeat = setInterval(() => {
@@ -113,6 +116,7 @@ export async function setup(ctx) {
     applied = normalizeConfig(fresh)
     config = applied.config
     errors = applied.errors
+    for (const state of sessions.values()) state.immuneTurns = config.immuneTurns
     await flush({ enabled: config.enabled, model: modelLabel(config), reason: errors[0] ?? null })
   }
 

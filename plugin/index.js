@@ -2,7 +2,7 @@
 import { watch } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 // src/core/command.js
 var USAGE = { kind: "usage" };
@@ -144,7 +144,7 @@ async function readJson(path) {
   }
 }
 async function writeJsonAtomic(path, value) {
-  await mkdir(join(path, ".."), { recursive: true });
+  await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
   await writeFile(temp, JSON.stringify(value, null, 2) + "\n");
   await rename(temp, path);
@@ -190,7 +190,10 @@ async function setup(ctx) {
     enabled: config.enabled,
     model: modelLabel(config),
     reason: errors[0] ?? null,
-    appVersion: ctx.app?.version ?? null
+    appVersion: ctx.app?.version ?? null,
+    lastAdviceAt: null,
+    lastMs: null,
+    cooldownUntil: null
   });
   const heartbeat = setInterval(() => {
     void flush();
@@ -202,6 +205,7 @@ async function setup(ctx) {
     applied = normalizeConfig(fresh);
     config = applied.config;
     errors = applied.errors;
+    for (const state of sessions.values()) state.immuneTurns = config.immuneTurns;
     await flush({ enabled: config.enabled, model: modelLabel(config), reason: errors[0] ?? null });
   }
   let watcher;
