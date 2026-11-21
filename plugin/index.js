@@ -122,6 +122,41 @@ async function appendRecord(path, record, fsOps = nodeFs) {
   await fsOps.appendFile(path, line);
 }
 
+// src/core/providers.js
+function buildProvidersSnapshot(models, providers, now = Date.now()) {
+  const byId = /* @__PURE__ */ new Map();
+  const ensure = (id) => {
+    let provider = byId.get(id);
+    if (!provider) {
+      provider = { id, name: id, models: [] };
+      byId.set(id, provider);
+    }
+    return provider;
+  };
+  for (const provider of Array.isArray(providers) ? providers : []) {
+    if (!provider?.id) continue;
+    const target = ensure(provider.id);
+    if (typeof provider.name === "string" && provider.name !== "")
+      target.name = provider.name;
+  }
+  for (const model of Array.isArray(models) ? models : []) {
+    const modelID = model?.modelID ?? model?.id;
+    const providerID = model?.providerID;
+    if (!modelID || !providerID) continue;
+    if (model?.type && model.type !== "chat") continue;
+    const provider = ensure(providerID);
+    if (provider.models.some((item) => item.id === modelID)) continue;
+    provider.models.push({ id: modelID, name: model?.name || modelID });
+  }
+  const list = [...byId.values()].filter((provider) => provider.models.length > 0).sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  for (const provider of list) {
+    provider.models.sort(
+      (left, right) => left.name.localeCompare(right.name, "ru")
+    );
+  }
+  return { at: now, providers: list };
+}
+
 // src/core/limits.js
 var ELLIPSIS = "\u2026";
 function limitText(text2, max) {
@@ -512,8 +547,27 @@ async function setup(ctx) {
     lastMs: null,
     cooldownUntil: null
   });
+  const providersPath = join(stateDir, "providers.json");
+  let snapshotTick = 0;
+  async function writeProviders() {
+    try {
+      const [models, providers] = await Promise.all([
+        ctx.model?.list?.({ location: { directory: locationDir } }),
+        ctx.provider?.list?.({ location: { directory: locationDir } })
+      ]);
+      const snapshot = buildProvidersSnapshot(
+        models?.data ?? models,
+        providers?.data ?? providers
+      );
+      if (snapshot.providers.length > 0)
+        await writeJsonAtomic(providersPath, snapshot);
+    } catch {
+    }
+  }
+  void writeProviders();
   const heartbeat = setInterval(() => {
     void flush();
+    if (++snapshotTick % 6 === 0) void writeProviders();
   }, HEARTBEAT_MS);
   heartbeat.unref?.();
   async function reloadConfig() {

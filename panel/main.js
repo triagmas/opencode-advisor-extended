@@ -126,11 +126,11 @@
   var hasOnlyKeys = (value, keys) => Object.keys(value).every((key) => keys.includes(key));
   var isLabel = (value) => String(value) === value && value.length >= 1 && value.length <= GUEST_STATUS_CONTROL_LABEL_MAX;
   var isValue = (value) => String(value) === value && value.length >= 1 && value.length <= GUEST_STATUS_CONTROL_VALUE_MAX;
-  var isGuestStatusControls = (controls) => {
-    if (!Array.isArray(controls) || controls.length > GUEST_STATUS_CONTROLS_MAX)
+  var isGuestStatusControls = (controls2) => {
+    if (!Array.isArray(controls2) || controls2.length > GUEST_STATUS_CONTROLS_MAX)
       return false;
     const ids = /* @__PURE__ */ new Set();
-    for (const control of controls) {
+    for (const control of controls2) {
       if (!isControlObject(control) || !GUEST_STATUS_CONTROL_ID.test(control.id) || !isLabel(control.label))
         return false;
       if (control.disabled !== void 0 && control.disabled !== true && control.disabled !== false)
@@ -1165,14 +1165,14 @@
           popoverClosedListeners.delete(listener);
         };
       },
-      setStatusControls: (controls) => {
+      setStatusControls: (controls2) => {
         if (lastReady?.features?.statusControls !== true) {
           return Promise.reject(new HostRequestError("UNSUPPORTED", "This host does not support status controls."));
         }
-        if (!isGuestStatusControls(controls)) {
+        if (!isGuestStatusControls(controls2)) {
           return Promise.reject(new HostRequestError("HOST_REJECTED", "Status controls must have unique bounded ids and valid selected options."));
         }
-        return request({ ...envelope, type: "status-controls", id: nextId(ids), payload: { controls } });
+        return request({ ...envelope, type: "status-controls", id: nextId(ids), payload: { controls: controls2 } });
       },
       openPopover: (payload) => {
         if (lastReady?.features?.popovers !== true) {
@@ -2018,6 +2018,18 @@ ${GUEST_UI_LOOK_CSS}`;
       node.setAttribute(name, value);
     }
   };
+  var onOutsideClick = (node, handler) => {
+    const listener = (event) => {
+      if (event.target instanceof Node && node.contains(event.target)) {
+        return;
+      }
+      handler();
+    };
+    document.addEventListener("pointerdown", listener, true);
+    return () => {
+      document.removeEventListener("pointerdown", listener, true);
+    };
+  };
 
   // node_modules/@openchamber/sdk/dist/ui/button.js
   var ring = () => {
@@ -2173,6 +2185,243 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     const target = enabled[Math.min(enabled.length - 1, Math.max(0, index + (key === "next" ? 1 : -1)))];
     return target?.id ?? null;
+  };
+
+  // node_modules/@openchamber/sdk/dist/ui/option.js
+  var optionId = (uid, id) => `${uid}-${id ?? ""}`;
+  var createOption = (uid, role, spec, on) => {
+    const node = button("oc-sdk-option");
+    node.id = optionId(uid, spec.id);
+    node.setAttribute("role", role);
+    node.tabIndex = -1;
+    node.disabled = Boolean(spec.disabled);
+    if (role === "option") {
+      node.setAttribute("aria-selected", spec.selected ? "true" : "false");
+    }
+    node.dataset.destructive = spec.destructive ? "true" : "false";
+    const label = el("span", "oc-sdk-option-label");
+    label.textContent = spec.label;
+    node.append(label);
+    if (spec.hint) {
+      const hint = el("span", "oc-sdk-option-hint");
+      hint.textContent = spec.hint;
+      node.append(hint);
+    }
+    if (role === "option") {
+      node.dataset.mark = "check";
+      const check = el("span", "oc-sdk-option-check");
+      check.append(icon("check", 14));
+      node.append(check);
+    }
+    node.addEventListener("pointerenter", on.hover);
+    node.addEventListener("click", on.pick);
+    return node;
+  };
+  var highlightOption = (container, focusOwner, uid, id) => {
+    const target = optionId(uid, id);
+    for (const child of Array.from(container.children)) {
+      if (child instanceof HTMLElement && child.classList.contains("oc-sdk-option")) {
+        child.dataset.active = child.id === target ? "true" : "false";
+      }
+    }
+    setAttr(focusOwner, "aria-activedescendant", id ? target : null);
+    container.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  };
+
+  // node_modules/@openchamber/sdk/dist/ui/popup.js
+  var placePopup = (popup, trigger) => {
+    const rect = trigger.getBoundingClientRect();
+    popup.style.minWidth = `${Math.round(rect.width)}px`;
+    popup.style.left = `${Math.round(rect.left)}px`;
+    popup.style.top = `${Math.round(rect.bottom + 4)}px`;
+    const height = popup.offsetHeight;
+    const roomBelow = window.innerHeight - rect.bottom - 8;
+    if (height > roomBelow && rect.top - 8 > roomBelow) {
+      popup.style.top = `${Math.max(8, Math.round(rect.top - 4 - height))}px`;
+    }
+    const overflow = rect.left + popup.offsetWidth - window.innerWidth + 8;
+    if (overflow > 0) {
+      popup.style.left = `${Math.max(8, Math.round(rect.left - overflow))}px`;
+    }
+  };
+  var openPopup = (host2, trigger, popup, close) => {
+    host2.append(popup);
+    placePopup(popup, trigger);
+    const stopOutside = onOutsideClick(host2, close);
+    const onResize = () => {
+      close();
+    };
+    const onScroll = (event) => {
+      if (event.target instanceof Node && popup.contains(event.target)) {
+        return;
+      }
+      close();
+    };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      stopOutside();
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onScroll, true);
+      popup.remove();
+    };
+  };
+
+  // node_modules/@openchamber/sdk/dist/ui/select.js
+  var filterSelectOptions = (options, query) => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) {
+      return [...options];
+    }
+    return options.filter((option) => option.label.toLowerCase().includes(needle) || option.id.toLowerCase().includes(needle));
+  };
+  var selectCount = 0;
+  var mountSelect = (root2, initial) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const uid = `oc-sdk-select-${selectCount += 1}`;
+    const wrap = el("div", "oc-sdk oc-sdk-select");
+    const caption = el("span", "oc-sdk-field-label");
+    caption.id = `${uid}-label`;
+    const trigger = button("oc-sdk-trigger");
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-labelledby", caption.id);
+    const value = el("span", "oc-sdk-trigger-value");
+    trigger.append(value, icon("chevron", 14, "oc-sdk-trigger-chevron"));
+    wrap.append(caption, trigger);
+    root2.append(wrap);
+    let query = "";
+    let activeId = null;
+    let closePopup = null;
+    const popup = el("div", "oc-sdk oc-sdk-popup");
+    const searchSlot = el("div", "oc-sdk-popup-search");
+    const search = el("input", "oc-sdk-input");
+    search.type = "text";
+    search.autocomplete = "off";
+    searchSlot.append(search);
+    const listbox = el("div");
+    listbox.setAttribute("role", "listbox");
+    listbox.tabIndex = -1;
+    popup.append(listbox);
+    const visible = () => filterSelectOptions(props.options, props.searchable ? query : "");
+    const focusOwner = () => props.searchable ? search : listbox;
+    const setActive = (id) => {
+      activeId = id;
+      highlightOption(listbox, focusOwner(), uid, id);
+    };
+    const paintOptions = () => {
+      clearNode(listbox);
+      const options = visible();
+      if (options.length === 0) {
+        const empty = el("div", "oc-sdk-popup-empty");
+        empty.textContent = "No matches";
+        listbox.append(empty);
+      }
+      for (const option of options) {
+        listbox.append(createOption(uid, "option", { ...option, selected: option.id === props.value }, {
+          hover: () => setActive(option.id),
+          pick: () => pick(option.id)
+        }));
+      }
+      setActive(options.some((option) => option.id === activeId) ? activeId : options[0]?.id ?? null);
+    };
+    const close = () => {
+      const dispose = closePopup;
+      closePopup = null;
+      dispose?.();
+      query = "";
+      search.value = "";
+      trigger.setAttribute("aria-expanded", "false");
+    };
+    const open = () => {
+      if (closePopup || props.disabled) {
+        return;
+      }
+      activeId = props.value;
+      search.placeholder = props.searchPlaceholder ?? "Search";
+      if (props.searchable)
+        popup.prepend(searchSlot);
+      else
+        searchSlot.remove();
+      paintOptions();
+      closePopup = openPopup(wrap, trigger, popup, close);
+      trigger.setAttribute("aria-expanded", "true");
+      focusOwner().focus();
+    };
+    const pick = (id) => {
+      close();
+      trigger.focus();
+      if (id !== props.value)
+        props.onChange(id);
+    };
+    const onTriggerClick = () => {
+      if (closePopup)
+        close();
+      else
+        open();
+    };
+    const onTriggerKey = (event) => {
+      if (!closePopup && navigationKey(event)) {
+        event.preventDefault();
+        open();
+      }
+    };
+    const onPopupKey = (event) => {
+      const step = navigationKey(event);
+      if (step) {
+        event.preventDefault();
+        setActive(moveListSelection(visible(), activeId, step));
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        if (activeId)
+          pick(activeId);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        trigger.focus();
+      } else if (props.searchable && event.target !== search && event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+        search.focus();
+      }
+    };
+    const onSearchInput = () => {
+      query = search.value;
+      paintOptions();
+    };
+    const onFocusOut = (event) => {
+      if (closePopup && !(event.relatedTarget instanceof Node && wrap.contains(event.relatedTarget)))
+        close();
+    };
+    const paint = () => {
+      setText(caption, props.label);
+      caption.hidden = !props.label;
+      const current = props.options.find((option) => option.id === props.value);
+      setText(value, current?.label ?? props.placeholder ?? "Select");
+      value.dataset.empty = current ? "false" : "true";
+      trigger.disabled = Boolean(props.disabled);
+      if (closePopup)
+        paintOptions();
+    };
+    trigger.addEventListener("click", onTriggerClick);
+    trigger.addEventListener("keydown", onTriggerKey);
+    popup.addEventListener("keydown", onPopupKey);
+    search.addEventListener("input", onSearchInput);
+    wrap.addEventListener("focusout", onFocusOut);
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        close();
+        trigger.removeEventListener("click", onTriggerClick);
+        trigger.removeEventListener("keydown", onTriggerKey);
+        popup.removeEventListener("keydown", onPopupKey);
+        search.removeEventListener("input", onSearchInput);
+        wrap.removeEventListener("focusout", onFocusOut);
+        wrap.remove();
+      }
+    };
   };
 
   // node_modules/@openchamber/sdk/dist/ui/checkbox.js
@@ -2491,6 +2740,7 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/panel/main.js
   var STATE_DIR = "~/.local/state/openchamber-advisor";
   var CONFIG_PATH = "~/.config/openchamber-advisor/config.json";
+  var PROVIDERS_PATH = "~/.local/state/openchamber-advisor/providers.json";
   var POLL_MS = 2e3;
   var host = connectHost();
   var root = document.getElementById("root");
@@ -2501,6 +2751,7 @@ ${GUEST_UI_LOOK_CSS}`;
     records: [],
     status: null,
     config: { ...DEFAULTS },
+    providers: [],
     draft: null,
     message: null
   };
@@ -2554,42 +2805,81 @@ ${GUEST_UI_LOOK_CSS}`;
   var settingsNotice = element("div");
   settingsPane.append(settingsFields, settingsActions, settingsNotice);
   var fieldHandles = {};
+  var controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null };
+  function setDraft(patch) {
+    state.draft = { ...state.draft ?? {}, ...patch };
+    state.message = null;
+    renderSettingsNotice();
+  }
   function addField(key, label) {
     const hostNode = element("div", "adv-field");
     settingsFields.append(hostNode);
     fieldHandles[key] = mountTextField(hostNode, {
       label,
       value: "",
-      onChange: (value) => {
-        state.draft = { ...state.draft ?? {}, [key]: value };
-        state.message = null;
-        renderSettingsNotice();
-      }
+      onChange: (value) => setDraft({ [key]: value })
     });
   }
-  addField("provider", "Provider");
-  addField("model", "Model");
-  addField("immuneTurns", "\u041F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432 \u043F\u043E\u0441\u043B\u0435 \u0441\u043E\u0432\u0435\u0442\u0430");
-  addField("maxDeltaMessages", "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u0432 \u043E\u0431\u0437\u043E\u0440\u0435 (0 \u2014 \u0431\u0435\u0437 \u043E\u0433\u0440\u0430\u043D\u0438\u0447\u0435\u043D\u0438\u044F)");
-  addField("noteMaxChars", "\u0414\u043B\u0438\u043D\u0430 \u0441\u043E\u0432\u0435\u0442\u0430, \u0437\u043D\u0430\u043A\u043E\u0432");
-  var enabledSwitch = mountSwitch(settingsFields, {
-    label: "\u0420\u0435\u0432\u044C\u044E\u0435\u0440 \u0432\u043A\u043B\u044E\u0447\u0451\u043D",
-    checked: DEFAULTS.enabled,
-    onChange: (checked) => {
-      state.draft = { ...state.draft ?? {}, enabled: checked };
-      state.message = null;
-      renderSettingsNotice();
+  function providerEntry(id) {
+    return state.providers.find((provider) => provider.id === id) ?? null;
+  }
+  function modelsOf(id) {
+    return providerEntry(id)?.models ?? [];
+  }
+  function addModelPickers() {
+    const providerHost = element("div", "adv-field");
+    settingsFields.append(providerHost);
+    controls.providerSelect = mountSelect(providerHost, {
+      label: "Provider",
+      value: null,
+      options: [],
+      searchable: true,
+      onChange: (id) => {
+        const models = modelsOf(id);
+        const current = { ...state.config, ...state.draft ?? {} };
+        const keep = models.some((model) => model.id === current.model);
+        setDraft({ provider: id, model: keep ? current.model : models[0]?.id ?? "" });
+        renderSettings();
+      }
+    });
+    const modelHost = element("div", "adv-field");
+    settingsFields.append(modelHost);
+    controls.modelSelect = mountSelect(modelHost, {
+      label: "Model",
+      value: null,
+      options: [],
+      searchable: true,
+      onChange: (id) => setDraft({ model: id })
+    });
+  }
+  function buildSettings() {
+    const mode = state.providers.length > 0 ? "select" : "text";
+    if (controls.mode === mode) return;
+    controls.mode = mode;
+    settingsFields.replaceChildren();
+    for (const key of ["provider", "model", "immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+      delete fieldHandles[key];
     }
-  });
-  var proseSwitch = mountSwitch(settingsFields, {
-    label: "\u0414\u043E\u0441\u0442\u0430\u0432\u043B\u044F\u0442\u044C \u043F\u0440\u043E\u0437\u0443 \u043A\u0430\u043A nit",
-    checked: DEFAULTS.proseFallback,
-    onChange: (checked) => {
-      state.draft = { ...state.draft ?? {}, proseFallback: checked };
-      state.message = null;
-      renderSettingsNotice();
+    if (mode === "select") {
+      addModelPickers();
+    } else {
+      addField("provider", "Provider");
+      addField("model", "Model");
     }
-  });
+    addField("immuneTurns", "\u041F\u0440\u043E\u043F\u0443\u0441\u043A\u0430\u0442\u044C \u0448\u0430\u0433\u043E\u0432 \u043F\u043E\u0441\u043B\u0435 \u0441\u043E\u0432\u0435\u0442\u0430");
+    addField("maxDeltaMessages", "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u0432 \u043E\u0431\u0437\u043E\u0440\u0435 (0 \u2014 \u0431\u0435\u0437 \u043E\u0433\u0440\u0430\u043D\u0438\u0447\u0435\u043D\u0438\u044F)");
+    addField("noteMaxChars", "\u0414\u043B\u0438\u043D\u0430 \u0441\u043E\u0432\u0435\u0442\u0430, \u0437\u043D\u0430\u043A\u043E\u0432");
+    controls.enabled = mountSwitch(settingsFields, {
+      label: "\u0420\u0435\u0432\u044C\u044E\u0435\u0440 \u0432\u043A\u043B\u044E\u0447\u0451\u043D",
+      checked: DEFAULTS.enabled,
+      onChange: (checked) => setDraft({ enabled: checked })
+    });
+    controls.prose = mountSwitch(settingsFields, {
+      label: "\u0414\u043E\u0441\u0442\u0430\u0432\u043B\u044F\u0442\u044C \u043F\u0440\u043E\u0437\u0443 \u043A\u0430\u043A nit",
+      checked: DEFAULTS.proseFallback,
+      onChange: (checked) => setDraft({ proseFallback: checked })
+    });
+  }
   mountButton(settingsActions, {
     label: "\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C",
     variant: "primary",
@@ -2674,15 +2964,30 @@ ${GUEST_UI_LOOK_CSS}`;
     return active2.tagName === "INPUT" || active2.tagName === "TEXTAREA";
   }
   function renderSettings() {
+    buildSettings();
     if (settingsEditing()) {
       renderSettingsNotice();
       return;
     }
     const effective = { ...state.config, ...state.draft ?? {} };
-    enabledSwitch.update({ checked: Boolean(effective.enabled) });
-    proseSwitch.update({ checked: Boolean(effective.proseFallback) });
-    for (const key of ["provider", "model", "immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
-      fieldHandles[key].update({ value: String(effective[key] ?? "") });
+    controls.enabled?.update({ checked: Boolean(effective.enabled) });
+    controls.prose?.update({ checked: Boolean(effective.proseFallback) });
+    if (controls.mode === "select") {
+      const providerId = effective.provider || state.providers[0]?.id || "";
+      controls.providerSelect?.update({
+        value: providerId || null,
+        options: state.providers.map((provider) => ({ id: provider.id, label: provider.name }))
+      });
+      const models = modelsOf(providerId);
+      controls.modelSelect?.update({
+        value: effective.model || models[0]?.id || null,
+        options: models.map((model) => ({ id: model.id, label: model.name })),
+        disabled: models.length === 0
+      });
+    } else {
+      for (const key of ["provider", "model", "immuneTurns", "maxDeltaMessages", "noteMaxChars"]) {
+        fieldHandles[key]?.update({ value: String(effective[key] ?? "") });
+      }
     }
     renderSettingsNotice();
   }
@@ -2786,6 +3091,13 @@ ${GUEST_UI_LOOK_CSS}`;
         }
       } catch {
       }
+    }
+    try {
+      const { content } = await host.readFile(PROVIDERS_PATH);
+      const snapshot = JSON.parse(content);
+      state.providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
+    } catch {
+      state.providers = [];
     }
     state.records = mergeRecords(journals);
     state.status = statuses.reduce((best, item) => !best || (item.at ?? 0) > (best.at ?? 0) ? item : best, null);

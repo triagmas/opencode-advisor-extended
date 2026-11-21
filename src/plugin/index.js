@@ -6,6 +6,7 @@ import { dirname, basename, join, resolve } from "node:path";
 import { parseCommand } from "../core/command.js";
 import { DEFAULTS, modelRef, normalizeConfig } from "../core/config.js";
 import { appendRecord } from "../core/journal.js";
+import { buildProvidersSnapshot } from "../core/providers.js";
 import { journalFileName } from "../core/journal-format.js";
 import { limitText } from "../core/limits.js";
 import { canReview, shouldReview } from "../core/scope.js";
@@ -133,8 +134,31 @@ export async function setup(ctx) {
     cooldownUntil: null,
   });
 
+  // The panel's model picker reads this snapshot: only models this server can
+  // actually call, refreshed while the plugin lives.
+  const providersPath = join(stateDir, "providers.json");
+  let snapshotTick = 0;
+  async function writeProviders() {
+    try {
+      const [models, providers] = await Promise.all([
+        ctx.model?.list?.({ location: { directory: locationDir } }),
+        ctx.provider?.list?.({ location: { directory: locationDir } }),
+      ]);
+      const snapshot = buildProvidersSnapshot(
+        models?.data ?? models,
+        providers?.data ?? providers,
+      );
+      if (snapshot.providers.length > 0)
+        await writeJsonAtomic(providersPath, snapshot);
+    } catch {
+      // The panel falls back to free-text provider/model fields.
+    }
+  }
+  void writeProviders();
+
   const heartbeat = setInterval(() => {
     void flush();
+    if (++snapshotTick % 6 === 0) void writeProviders();
   }, HEARTBEAT_MS);
   heartbeat.unref?.();
 

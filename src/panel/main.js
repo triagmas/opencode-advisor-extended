@@ -5,6 +5,7 @@ import {
   mountBanner,
   mountButton,
   mountEmpty,
+  mountSelect,
   mountSwitch,
   mountTabs,
   mountTextField,
@@ -16,6 +17,7 @@ import { buildJournalView, connectionState, mergeRecords, severityTone } from '.
 
 const STATE_DIR = '~/.local/state/openchamber-advisor'
 const CONFIG_PATH = '~/.config/openchamber-advisor/config.json'
+const PROVIDERS_PATH = '~/.local/state/openchamber-advisor/providers.json'
 const POLL_MS = 2_000
 
 const host = connectHost()
@@ -28,6 +30,7 @@ const state = {
   records: [],
   status: null,
   config: { ...DEFAULTS },
+  providers: [],
   draft: null,
   message: null,
 }
@@ -93,6 +96,13 @@ const settingsNotice = element('div')
 settingsPane.append(settingsFields, settingsActions, settingsNotice)
 
 const fieldHandles = {}
+const controls = { mode: null, providerSelect: null, modelSelect: null, enabled: null, prose: null }
+
+function setDraft(patch) {
+  state.draft = { ...(state.draft ?? {}), ...patch }
+  state.message = null
+  renderSettingsNotice()
+}
 
 function addField(key, label) {
   const hostNode = element('div', 'adv-field')
@@ -100,39 +110,77 @@ function addField(key, label) {
   fieldHandles[key] = mountTextField(hostNode, {
     label,
     value: '',
-    onChange: (value) => {
-      state.draft = { ...(state.draft ?? {}), [key]: value }
-      state.message = null
-      renderSettingsNotice()
-    },
+    onChange: (value) => setDraft({ [key]: value }),
   })
 }
 
-addField('provider', 'Provider')
-addField('model', 'Model')
-addField('immuneTurns', 'Пропускать шагов после совета')
-addField('maxDeltaMessages', 'Сообщений в обзоре (0 — без ограничения)')
-addField('noteMaxChars', 'Длина совета, знаков')
+function providerEntry(id) {
+  return state.providers.find((provider) => provider.id === id) ?? null
+}
 
-const enabledSwitch = mountSwitch(settingsFields, {
-  label: 'Ревьюер включён',
-  checked: DEFAULTS.enabled,
-  onChange: (checked) => {
-    state.draft = { ...(state.draft ?? {}), enabled: checked }
-    state.message = null
-    renderSettingsNotice()
-  },
-})
+function modelsOf(id) {
+  return providerEntry(id)?.models ?? []
+}
 
-const proseSwitch = mountSwitch(settingsFields, {
-  label: 'Доставлять прозу как nit',
-  checked: DEFAULTS.proseFallback,
-  onChange: (checked) => {
-    state.draft = { ...(state.draft ?? {}), proseFallback: checked }
-    state.message = null
-    renderSettingsNotice()
-  },
-})
+function addModelPickers() {
+  const providerHost = element('div', 'adv-field')
+  settingsFields.append(providerHost)
+  controls.providerSelect = mountSelect(providerHost, {
+    label: 'Provider',
+    value: null,
+    options: [],
+    searchable: true,
+    onChange: (id) => {
+      const models = modelsOf(id)
+      const current = { ...state.config, ...(state.draft ?? {}) }
+      const keep = models.some((model) => model.id === current.model)
+      setDraft({ provider: id, model: keep ? current.model : (models[0]?.id ?? '') })
+      renderSettings()
+    },
+  })
+
+  const modelHost = element('div', 'adv-field')
+  settingsFields.append(modelHost)
+  controls.modelSelect = mountSelect(modelHost, {
+    label: 'Model',
+    value: null,
+    options: [],
+    searchable: true,
+    onChange: (id) => setDraft({ model: id }),
+  })
+}
+
+/** Rebuilds the settings form only when the source of provider/model changes. */
+function buildSettings() {
+  const mode = state.providers.length > 0 ? 'select' : 'text'
+  if (controls.mode === mode) return
+  controls.mode = mode
+  settingsFields.replaceChildren()
+  for (const key of ['provider', 'model', 'immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+    delete fieldHandles[key]
+  }
+  if (mode === 'select') {
+    addModelPickers()
+  } else {
+    addField('provider', 'Provider')
+    addField('model', 'Model')
+  }
+  addField('immuneTurns', 'Пропускать шагов после совета')
+  addField('maxDeltaMessages', 'Сообщений в обзоре (0 — без ограничения)')
+  addField('noteMaxChars', 'Длина совета, знаков')
+
+  controls.enabled = mountSwitch(settingsFields, {
+    label: 'Ревьюер включён',
+    checked: DEFAULTS.enabled,
+    onChange: (checked) => setDraft({ enabled: checked }),
+  })
+
+  controls.prose = mountSwitch(settingsFields, {
+    label: 'Доставлять прозу как nit',
+    checked: DEFAULTS.proseFallback,
+    onChange: (checked) => setDraft({ proseFallback: checked }),
+  })
+}
 
 mountButton(settingsActions, {
   label: 'Сохранить',
@@ -238,15 +286,31 @@ function settingsEditing() {
 }
 
 function renderSettings() {
+  buildSettings()
   if (settingsEditing()) {
     renderSettingsNotice()
     return
   }
   const effective = { ...state.config, ...(state.draft ?? {}) }
-  enabledSwitch.update({ checked: Boolean(effective.enabled) })
-  proseSwitch.update({ checked: Boolean(effective.proseFallback) })
-  for (const key of ['provider', 'model', 'immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
-    fieldHandles[key].update({ value: String(effective[key] ?? '') })
+  controls.enabled?.update({ checked: Boolean(effective.enabled) })
+  controls.prose?.update({ checked: Boolean(effective.proseFallback) })
+
+  if (controls.mode === 'select') {
+    const providerId = effective.provider || state.providers[0]?.id || ''
+    controls.providerSelect?.update({
+      value: providerId || null,
+      options: state.providers.map((provider) => ({ id: provider.id, label: provider.name })),
+    })
+    const models = modelsOf(providerId)
+    controls.modelSelect?.update({
+      value: effective.model || models[0]?.id || null,
+      options: models.map((model) => ({ id: model.id, label: model.name })),
+      disabled: models.length === 0,
+    })
+  } else {
+    for (const key of ['provider', 'model', 'immuneTurns', 'maxDeltaMessages', 'noteMaxChars']) {
+      fieldHandles[key]?.update({ value: String(effective[key] ?? '') })
+    }
   }
   renderSettingsNotice()
 }
@@ -366,6 +430,15 @@ async function updateState() {
     } catch {
       // One unreadable file must not hide the rest of the journal.
     }
+  }
+
+  try {
+    const { content } = await host.readFile(PROVIDERS_PATH)
+    const snapshot = JSON.parse(content)
+    state.providers = Array.isArray(snapshot?.providers) ? snapshot.providers : []
+  } catch {
+    // No snapshot yet: keep free-text provider/model fields.
+    state.providers = []
   }
 
   state.records = mergeRecords(journals)
