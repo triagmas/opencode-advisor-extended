@@ -2,7 +2,7 @@
 import { watch } from "node:fs";
 import { mkdir as mkdir2, readFile as readFile2, rename as rename2, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname as dirname2, join, resolve } from "node:path";
+import { dirname as dirname2, basename, join, resolve } from "node:path";
 
 // src/core/command.js
 var USAGE = { kind: "usage" };
@@ -395,7 +395,15 @@ async function setup(ctx) {
   const stateOf = (sessionID) => {
     let state = sessions.get(sessionID);
     if (!state) {
-      state = { lastSeenID: null, turns: 0, immuneTurns: config.immuneTurns, inFlight: false, disabled: false, muted: false, cooldownUntil: 0 };
+      state = {
+        lastSeenID: null,
+        turns: 0,
+        immuneTurns: config.immuneTurns,
+        inFlight: false,
+        disabled: false,
+        muted: false,
+        cooldownUntil: 0
+      };
       sessions.set(sessionID, state);
     }
     return state;
@@ -404,7 +412,15 @@ async function setup(ctx) {
   let lastAdviceAt = null;
   let lastMs = null;
   let cooldownUntil = null;
-  let status = buildStatus({ ...emptyCounters(), startedAt: Date.now(), pluginVersion: PLUGIN_VERSION }, {}, Date.now());
+  let status = buildStatus(
+    {
+      ...emptyCounters(),
+      startedAt: Date.now(),
+      pluginVersion: PLUGIN_VERSION
+    },
+    {},
+    Date.now()
+  );
   let queue = Promise.resolve();
   const flush = (patch = {}) => {
     status = buildStatus(status, patch, Date.now());
@@ -436,14 +452,24 @@ async function setup(ctx) {
       state.immuneTurns = config.immuneTurns;
       state.muted = false;
     }
-    await flush({ enabled: config.enabled, model: modelLabel(config), reason: errors[0] ?? null });
+    await flush({
+      enabled: config.enabled,
+      model: modelLabel(config),
+      reason: errors[0] ?? null
+    });
   }
   let watcher;
   try {
-    watcher = watch(configPath, { persistent: false }, () => {
-      void reloadConfig().catch(() => {
-      });
-    });
+    const configName = basename(configPath);
+    watcher = watch(
+      dirname2(configPath),
+      { persistent: false },
+      (_event, filename) => {
+        if (filename && String(filename) !== configName) return;
+        void reloadConfig().catch(() => {
+        });
+      }
+    );
     watcher.unref?.();
   } catch {
   }
@@ -486,24 +512,42 @@ async function setup(ctx) {
         text2 = reply(statusLine(state));
         break;
       case "model-set":
-        await patchConfig({ provider: parsed.providerID, model: parsed.modelID });
+        await patchConfig({
+          provider: parsed.providerID,
+          model: parsed.modelID
+        });
         text2 = reply(`\u043C\u043E\u0434\u0435\u043B\u044C: ${parsed.providerID}/${parsed.modelID}`);
         break;
       case "model-reset":
-        await patchConfig({ provider: DEFAULTS.provider, model: DEFAULTS.model });
+        await patchConfig({
+          provider: DEFAULTS.provider,
+          model: DEFAULTS.model
+        });
         text2 = reply("\u043C\u043E\u0434\u0435\u043B\u044C \u0441\u0431\u0440\u043E\u0448\u0435\u043D\u0430, \u0437\u0430\u0434\u0430\u0439\u0442\u0435 provider/model \u0437\u0430\u043D\u043E\u0432\u043E");
         break;
       default:
         text2 = reply(USAGE_TEXT);
     }
-    await ctx.session.synthetic({ sessionID, text: text2, description: "advisor:status", delivery: "steer" });
+    await ctx.session.synthetic({
+      sessionID,
+      text: text2,
+      description: "advisor:status",
+      delivery: "steer"
+    });
   }
   const registration = await ctx.command.transform((editor) => {
-    editor.add({ name: "advisor", description: "Advisor: on | off | status | model set|reset", execute: runCommand });
+    editor.add({
+      name: "advisor",
+      description: "Advisor: on | off | status | model set|reset",
+      execute: runCommand
+    });
   });
   async function clearNote(sessionID) {
     try {
-      await ctx.session.instructions?.entry?.remove({ sessionID, key: NOTE_KEY2 });
+      await ctx.session.instructions?.entry?.remove({
+        sessionID,
+        key: NOTE_KEY2
+      });
     } catch {
     }
   }
@@ -539,7 +583,13 @@ async function setup(ctx) {
     if (info && !shouldReview({ parentID: info.parentID, archived })) return;
     if (state.inFlight) return;
     const started = Date.now();
-    const result = await runReview({ ctx, config, sessionID, state, now: started });
+    const result = await runReview({
+      ctx,
+      config,
+      sessionID,
+      state,
+      now: started
+    });
     const patch = {};
     if (result.kind !== "skipped") {
       counters.calls += 1;
@@ -586,7 +636,10 @@ async function setup(ctx) {
     }
   }
   const controller = new AbortController();
-  const subscription = ctx.event.subscribe({ types: EVENT_TYPES, signal: controller.signal });
+  const subscription = ctx.event.subscribe({
+    types: EVENT_TYPES,
+    signal: controller.signal
+  });
   let unsubscribe = () => {
   };
   if (subscription && typeof subscription[Symbol.asyncIterator] === "function") {

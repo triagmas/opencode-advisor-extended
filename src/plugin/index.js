@@ -1,52 +1,52 @@
-import { watch } from 'node:fs'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { watch } from "node:fs";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, basename, join, resolve } from "node:path";
 
-import { parseCommand } from '../core/command.js'
-import { DEFAULTS, modelRef, normalizeConfig } from '../core/config.js'
-import { appendRecord } from '../core/journal.js'
-import { journalFileName } from '../core/journal-format.js'
-import { limitText } from '../core/limits.js'
-import { canReview, shouldReview } from '../core/scope.js'
-import { buildStatus, emptyCounters, statusFileName } from '../core/status.js'
-import { runReview } from './review.js'
+import { parseCommand } from "../core/command.js";
+import { DEFAULTS, modelRef, normalizeConfig } from "../core/config.js";
+import { appendRecord } from "../core/journal.js";
+import { journalFileName } from "../core/journal-format.js";
+import { limitText } from "../core/limits.js";
+import { canReview, shouldReview } from "../core/scope.js";
+import { buildStatus, emptyCounters, statusFileName } from "../core/status.js";
+import { runReview } from "./review.js";
 
-export const PLUGIN_VERSION = '0.1.0'
+export const PLUGIN_VERSION = "0.1.0";
 
-const HEARTBEAT_MS = 10_000
-const ANSWER_MAX = 500
-const NOTE_KEY = 'advisor-note'
+const HEARTBEAT_MS = 10_000;
+const ANSWER_MAX = 500;
+const NOTE_KEY = "advisor-note";
 const EVENT_TYPES = [
-  'session.step.started',
-  'session.step.ended',
-  'session.execution.succeeded',
-  'session.execution.failed',
-]
+  "session.step.started",
+  "session.step.ended",
+  "session.execution.succeeded",
+  "session.execution.failed",
+];
 
 const USAGE_TEXT =
-  'advisor: on | off | status | model set <provider>/<model> | model reset'
+  "advisor: on | off | status | model set <provider>/<model> | model reset";
 
 function modelLabel(config) {
-  const ref = modelRef(config)
-  return ref ? `${ref.providerID}/${ref.modelID}` : null
+  const ref = modelRef(config);
+  return ref ? `${ref.providerID}/${ref.modelID}` : null;
 }
 
 async function readJson(path) {
   try {
-    return JSON.parse(await readFile(path, 'utf8'))
+    return JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
-    if (error?.code === 'ENOENT') return null
+    if (error?.code === "ENOENT") return null;
     // A half-written or hand-broken file: fall back to defaults, do not throw.
-    return {}
+    return {};
   }
 }
 
 async function writeJsonAtomic(path, value) {
-  await mkdir(dirname(path), { recursive: true })
-  const temp = `${path}.${process.pid}.tmp`
-  await writeFile(temp, JSON.stringify(value, null, 2) + '\n')
-  await rename(temp, path)
+  await mkdir(dirname(path), { recursive: true });
+  const temp = `${path}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(value, null, 2) + "\n");
+  await rename(temp, path);
 }
 
 /**
@@ -55,53 +55,73 @@ async function writeJsonAtomic(path, value) {
  * OpenChamber panel reads.
  */
 export async function setup(ctx) {
-  const options = ctx.options ?? {}
-  const home = options.homeDir ?? homedir()
-  const configDir = options.configDir ?? join(home, '.config', 'openchamber-advisor')
-  const stateDir = options.stateDir ?? join(home, '.local', 'state', 'openchamber-advisor')
-  const locationDir = resolve(String(ctx.location?.directory ?? process.cwd()))
+  const options = ctx.options ?? {};
+  const home = options.homeDir ?? homedir();
+  const configDir =
+    options.configDir ?? join(home, ".config", "openchamber-advisor");
+  const stateDir =
+    options.stateDir ?? join(home, ".local", "state", "openchamber-advisor");
+  const locationDir = resolve(String(ctx.location?.directory ?? process.cwd()));
 
-  const configPath = join(configDir, 'config.json')
-  const statusPath = join(stateDir, statusFileName(locationDir))
-  const journalPath = join(stateDir, journalFileName(locationDir))
+  const configPath = join(configDir, "config.json");
+  const statusPath = join(stateDir, statusFileName(locationDir));
+  const journalPath = join(stateDir, journalFileName(locationDir));
 
-  await mkdir(configDir, { recursive: true })
-  await mkdir(stateDir, { recursive: true })
+  await mkdir(configDir, { recursive: true });
+  await mkdir(stateDir, { recursive: true });
 
-  let raw = await readJson(configPath)
+  let raw = await readJson(configPath);
   if (raw === null) {
-    raw = { ...DEFAULTS }
-    await writeJsonAtomic(configPath, raw)
+    raw = { ...DEFAULTS };
+    await writeJsonAtomic(configPath, raw);
   }
 
-  let applied = normalizeConfig(raw)
-  let config = applied.config
-  let errors = applied.errors
+  let applied = normalizeConfig(raw);
+  let config = applied.config;
+  let errors = applied.errors;
 
-  const sessions = new Map()
+  const sessions = new Map();
   const stateOf = (sessionID) => {
-    let state = sessions.get(sessionID)
+    let state = sessions.get(sessionID);
     if (!state) {
-      state = { lastSeenID: null, turns: 0, immuneTurns: config.immuneTurns, inFlight: false, disabled: false, muted: false, cooldownUntil: 0 }
-      sessions.set(sessionID, state)
+      state = {
+        lastSeenID: null,
+        turns: 0,
+        immuneTurns: config.immuneTurns,
+        inFlight: false,
+        disabled: false,
+        muted: false,
+        cooldownUntil: 0,
+      };
+      sessions.set(sessionID, state);
     }
-    return state
-  }
+    return state;
+  };
 
-  const counters = emptyCounters()
-  let lastAdviceAt = null
-  let lastMs = null
-  let cooldownUntil = null
+  const counters = emptyCounters();
+  let lastAdviceAt = null;
+  let lastMs = null;
+  let cooldownUntil = null;
 
-  let status = buildStatus({ ...emptyCounters(), startedAt: Date.now(), pluginVersion: PLUGIN_VERSION }, {}, Date.now())
-  let queue = Promise.resolve()
+  let status = buildStatus(
+    {
+      ...emptyCounters(),
+      startedAt: Date.now(),
+      pluginVersion: PLUGIN_VERSION,
+    },
+    {},
+    Date.now(),
+  );
+  let queue = Promise.resolve();
 
   const flush = (patch = {}) => {
-    status = buildStatus(status, patch, Date.now())
-    const snapshot = { ...status, at: Date.now() }
-    queue = queue.then(() => writeJsonAtomic(statusPath, snapshot)).catch(() => {})
-    return queue
-  }
+    status = buildStatus(status, patch, Date.now());
+    const snapshot = { ...status, at: Date.now() };
+    queue = queue
+      .then(() => writeJsonAtomic(statusPath, snapshot))
+      .catch(() => {});
+    return queue;
+  };
 
   await flush({
     enabled: config.enabled,
@@ -111,103 +131,140 @@ export async function setup(ctx) {
     lastAdviceAt: null,
     lastMs: null,
     cooldownUntil: null,
-  })
+  });
 
   const heartbeat = setInterval(() => {
-    void flush()
-  }, HEARTBEAT_MS)
-  heartbeat.unref?.()
+    void flush();
+  }, HEARTBEAT_MS);
+  heartbeat.unref?.();
 
   async function reloadConfig() {
-    const fresh = await readJson(configPath)
-    if (fresh === null) return
-    applied = normalizeConfig(fresh)
-    config = applied.config
-    errors = applied.errors
+    const fresh = await readJson(configPath);
+    if (fresh === null) return;
+    applied = normalizeConfig(fresh);
+    config = applied.config;
+    errors = applied.errors;
     for (const state of sessions.values()) {
-      state.immuneTurns = config.immuneTurns
+      state.immuneTurns = config.immuneTurns;
       // A config edit is one of the two ways out of a model-error silence.
-      state.muted = false
+      state.muted = false;
     }
-    await flush({ enabled: config.enabled, model: modelLabel(config), reason: errors[0] ?? null })
+    await flush({
+      enabled: config.enabled,
+      model: modelLabel(config),
+      reason: errors[0] ?? null,
+    });
   }
 
-  let watcher
+  let watcher;
   try {
-    watcher = watch(configPath, { persistent: false }, () => {
-      void reloadConfig().catch(() => {})
-    })
-    watcher.unref?.()
+    // Watch the directory, not the file: the panel replaces config.json with an
+    // atomic rename, and a watch pinned to the old inode goes silent after it.
+    const configName = basename(configPath);
+    watcher = watch(
+      dirname(configPath),
+      { persistent: false },
+      (_event, filename) => {
+        if (filename && String(filename) !== configName) return;
+        void reloadConfig().catch(() => {});
+      },
+    );
+    watcher.unref?.();
   } catch {
     // No watcher means settings need a restart; everything else still works.
   }
 
   async function patchConfig(patch) {
-    const current = (await readJson(configPath)) ?? { ...config }
-    await writeJsonAtomic(configPath, { ...current, ...patch })
-    await reloadConfig()
+    const current = (await readJson(configPath)) ?? { ...config };
+    await writeJsonAtomic(configPath, { ...current, ...patch });
+    await reloadConfig();
   }
 
   const reply = (body) => {
-    const missing = errors.includes('model-missing')
-      ? ' Модель не задана (model-missing): укажите provider/model в панели или /advisor model set <provider>/<model>.'
-      : ''
-    return limitText(`Advisor: ${body}${missing}`, ANSWER_MAX)
-  }
+    const missing = errors.includes("model-missing")
+      ? " Модель не задана (model-missing): укажите provider/model в панели или /advisor model set <provider>/<model>."
+      : "";
+    return limitText(`Advisor: ${body}${missing}`, ANSWER_MAX);
+  };
 
   function statusLine(session) {
-    const state = config.enabled ? 'включён' : 'выключен'
-    const model = modelLabel(config) ?? 'нет (model-missing)'
-    const last = status.lastAdviceAt ? new Date(status.lastAdviceAt).toLocaleTimeString() : 'советов ещё не было'
-    const latency = typeof status.lastMs === 'number' ? `${status.lastMs} мс` : '—'
-    const mute = session?.disabled ? 'сессия выключена' : session?.muted ? 'молчит после ошибки модели' : 'сессия включена'
-    return `состояние: ${state}, ${mute}; модель: ${model}; вызовов: ${status.calls}; дропов: ${status.drops.empty + status.drops.unparsed + status.drops.error}; задержка: ${latency}; ${last}`
+    const state = config.enabled ? "включён" : "выключен";
+    const model = modelLabel(config) ?? "нет (model-missing)";
+    const last = status.lastAdviceAt
+      ? new Date(status.lastAdviceAt).toLocaleTimeString()
+      : "советов ещё не было";
+    const latency =
+      typeof status.lastMs === "number" ? `${status.lastMs} мс` : "—";
+    const mute = session?.disabled
+      ? "сессия выключена"
+      : session?.muted
+        ? "молчит после ошибки модели"
+        : "сессия включена";
+    return `состояние: ${state}, ${mute}; модель: ${model}; вызовов: ${status.calls}; дропов: ${status.drops.empty + status.drops.unparsed + status.drops.error}; задержка: ${latency}; ${last}`;
   }
 
   async function runCommand({ sessionID, prompt }) {
-    const parsed = parseCommand(prompt?.text ?? '')
-    const state = stateOf(sessionID)
-    let text
+    const parsed = parseCommand(prompt?.text ?? "");
+    const state = stateOf(sessionID);
+    let text;
 
     switch (parsed.kind) {
-      case 'toggle':
-        state.disabled = !state.disabled
-        text = reply(`сессия ${state.disabled ? 'выключена' : 'включена'}`)
-        break
-      case 'on':
-        state.disabled = false
-        state.muted = false
-        text = reply('сессия включена')
-        break
-      case 'off':
-        state.disabled = true
-        text = reply('сессия выключена')
-        break
-      case 'status':
-        text = reply(statusLine(state))
-        break
-      case 'model-set':
-        await patchConfig({ provider: parsed.providerID, model: parsed.modelID })
-        text = reply(`модель: ${parsed.providerID}/${parsed.modelID}`)
-        break
-      case 'model-reset':
-        await patchConfig({ provider: DEFAULTS.provider, model: DEFAULTS.model })
-        text = reply('модель сброшена, задайте provider/model заново')
-        break
+      case "toggle":
+        state.disabled = !state.disabled;
+        text = reply(`сессия ${state.disabled ? "выключена" : "включена"}`);
+        break;
+      case "on":
+        state.disabled = false;
+        state.muted = false;
+        text = reply("сессия включена");
+        break;
+      case "off":
+        state.disabled = true;
+        text = reply("сессия выключена");
+        break;
+      case "status":
+        text = reply(statusLine(state));
+        break;
+      case "model-set":
+        await patchConfig({
+          provider: parsed.providerID,
+          model: parsed.modelID,
+        });
+        text = reply(`модель: ${parsed.providerID}/${parsed.modelID}`);
+        break;
+      case "model-reset":
+        await patchConfig({
+          provider: DEFAULTS.provider,
+          model: DEFAULTS.model,
+        });
+        text = reply("модель сброшена, задайте provider/model заново");
+        break;
       default:
-        text = reply(USAGE_TEXT)
+        text = reply(USAGE_TEXT);
     }
 
-    await ctx.session.synthetic({ sessionID, text, description: 'advisor:status', delivery: 'steer' })
+    await ctx.session.synthetic({
+      sessionID,
+      text,
+      description: "advisor:status",
+      delivery: "steer",
+    });
   }
 
   const registration = await ctx.command.transform((editor) => {
-    editor.add({ name: 'advisor', description: 'Advisor: on | off | status | model set|reset', execute: runCommand })
-  })
+    editor.add({
+      name: "advisor",
+      description: "Advisor: on | off | status | model set|reset",
+      execute: runCommand,
+    });
+  });
 
   async function clearNote(sessionID) {
     try {
-      await ctx.session.instructions?.entry?.remove({ sessionID, key: NOTE_KEY })
+      await ctx.session.instructions?.entry?.remove({
+        sessionID,
+        key: NOTE_KEY,
+      });
     } catch {
       // No entry support (older server): the note simply was not set.
     }
@@ -215,64 +272,75 @@ export async function setup(ctx) {
 
   async function handleEvent(event) {
     switch (event?.type) {
-      case 'session.step.started': {
-        const sessionID = event.data?.sessionID
-        if (!sessionID) return
-        stateOf(sessionID).turns += 1
-        await clearNote(sessionID)
-        return
+      case "session.step.started": {
+        const sessionID = event.data?.sessionID;
+        if (!sessionID) return;
+        stateOf(sessionID).turns += 1;
+        await clearNote(sessionID);
+        return;
       }
-      case 'session.step.ended': {
-        const sessionID = event.data?.sessionID
-        if (!sessionID) return
-        await onStepEnded(sessionID)
-        return
+      case "session.step.ended": {
+        const sessionID = event.data?.sessionID;
+        if (!sessionID) return;
+        await onStepEnded(sessionID);
+        return;
       }
       default:
     }
   }
 
   async function onStepEnded(sessionID) {
-    const state = stateOf(sessionID)
-    if (state.inFlight) return
-    if (!canReview(state, config, Date.now())) return
+    const state = stateOf(sessionID);
+    if (state.inFlight) return;
+    if (!canReview(state, config, Date.now())) return;
 
-    let info = null
+    let info = null;
     try {
-      info = await ctx.session.get({ sessionID })
+      info = await ctx.session.get({ sessionID });
     } catch {
-      info = null
+      info = null;
     }
-    const archived = Boolean(info?.time?.archived ?? info?.archived)
-    if (info && !shouldReview({ parentID: info.parentID, archived })) return
-    if (state.inFlight) return
+    const archived = Boolean(info?.time?.archived ?? info?.archived);
+    if (info && !shouldReview({ parentID: info.parentID, archived })) return;
+    if (state.inFlight) return;
 
-    const started = Date.now()
-    const result = await runReview({ ctx, config, sessionID, state, now: started })
+    const started = Date.now();
+    const result = await runReview({
+      ctx,
+      config,
+      sessionID,
+      state,
+      now: started,
+    });
 
-    const patch = {}
-    if (result.kind !== 'skipped') {
-      counters.calls += 1
-      patch.calls = counters.calls
+    const patch = {};
+    if (result.kind !== "skipped") {
+      counters.calls += 1;
+      patch.calls = counters.calls;
     }
 
-    if (result.kind === 'dropped') {
-      const reason = result.reason === 'empty' || result.reason === 'unparsed' || result.reason === 'error' ? result.reason : 'error'
-      counters.drops[reason] += 1
-      patch.drops = { ...counters.drops }
-      if (reason === 'error') state.muted = true
+    if (result.kind === "dropped") {
+      const reason =
+        result.reason === "empty" ||
+        result.reason === "unparsed" ||
+        result.reason === "error"
+          ? result.reason
+          : "error";
+      counters.drops[reason] += 1;
+      patch.drops = { ...counters.drops };
+      if (reason === "error") state.muted = true;
     }
 
-    if (result.kind === 'delivered') {
-      lastAdviceAt = Date.now()
-      lastMs = result.ms ?? null
-      cooldownUntil = state.cooldownUntil
-      patch.lastAdviceAt = lastAdviceAt
-      patch.lastMs = lastMs
-      patch.cooldownUntil = cooldownUntil
+    if (result.kind === "delivered") {
+      lastAdviceAt = Date.now();
+      lastMs = result.ms ?? null;
+      cooldownUntil = state.cooldownUntil;
+      patch.lastAdviceAt = lastAdviceAt;
+      patch.lastMs = lastMs;
+      patch.cooldownUntil = cooldownUntil;
       try {
         await appendRecord(journalPath, {
-          kind: 'advice',
+          kind: "advice",
           at: lastAdviceAt,
           sessionID,
           project: locationDir,
@@ -280,20 +348,20 @@ export async function setup(ctx) {
           note: result.note,
           model: modelLabel(config),
           ms: lastMs,
-        })
+        });
       } catch {
         // A broken journal must not break the review loop.
       }
     }
 
-    if (Object.keys(patch).length > 0) await flush(patch)
+    if (Object.keys(patch).length > 0) await flush(patch);
   }
 
   async function consume(iterable) {
     try {
       for await (const event of iterable) {
         try {
-          await handleEvent(event)
+          await handleEvent(event);
         } catch {
           // One bad event must not end the subscription.
         }
@@ -303,40 +371,46 @@ export async function setup(ctx) {
     }
   }
 
-  const controller = new AbortController()
-  const subscription = ctx.event.subscribe({ types: EVENT_TYPES, signal: controller.signal })
-  let unsubscribe = () => {}
-  if (subscription && typeof subscription[Symbol.asyncIterator] === 'function') {
-    void consume(subscription)
-  } else if (typeof subscription === 'function') {
-    unsubscribe = subscription
+  const controller = new AbortController();
+  const subscription = ctx.event.subscribe({
+    types: EVENT_TYPES,
+    signal: controller.signal,
+  });
+  let unsubscribe = () => {};
+  if (
+    subscription &&
+    typeof subscription[Symbol.asyncIterator] === "function"
+  ) {
+    void consume(subscription);
+  } else if (typeof subscription === "function") {
+    unsubscribe = subscription;
   }
 
   return async function dispose() {
-    clearInterval(heartbeat)
-    controller.abort()
+    clearInterval(heartbeat);
+    controller.abort();
     try {
-      watcher?.close()
+      watcher?.close();
     } catch {
       // Already closed.
     }
     try {
-      await unsubscribe()
+      await unsubscribe();
     } catch {
       // Nothing to undo.
     }
     try {
-      await registration?.dispose?.()
+      await registration?.dispose?.();
     } catch {
       // Nothing to undo.
     }
     try {
-      await subscription?.return?.()
+      await subscription?.return?.();
     } catch {
       // Nothing to undo.
     }
-    sessions.clear()
-  }
+    sessions.clear();
+  };
 }
 
-export default { id: 'advisor', setup }
+export default { id: "advisor", setup };
