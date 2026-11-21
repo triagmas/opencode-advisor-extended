@@ -9,7 +9,11 @@ import { appendRecord } from "../core/journal.js";
 import { buildProvidersSnapshot } from "../core/providers.js";
 import { journalFileName, suggestionFileName } from "../core/journal-format.js";
 import { nextBlockInstruction } from "../core/next-block.js";
-import { buildNextPromptPrompt, parseSuggestion } from "../core/next-prompt.js";
+import {
+  buildNextPromptPrompt,
+  parseSuggestion,
+  agentOfferSuggestion,
+} from "../core/next-prompt.js";
 import { limitText } from "../core/limits.js";
 import { canReview, shouldReview } from "../core/scope.js";
 import { buildStatus, emptyCounters, statusFileName } from "../core/status.js";
@@ -481,7 +485,12 @@ export async function setup(ctx) {
         model: { providerID: model.providerID, id: model.modelID },
         prompt: buildNextPromptPrompt(transcript),
       });
-      const text = parseSuggestion(answer?.text, config.nextPromptMaxChars);
+      const text =
+        parseSuggestion(answer?.text, config.nextPromptMaxChars) ??
+        agentOfferSuggestion(
+          messages.filter((message) => message.role !== "user").at(-1)?.text,
+          config.nextPromptMaxChars,
+        );
       if (!text) {
         // The request is satisfied (or needs the person): drop the stale offer.
         await unlink(suggestionPathFor(sessionID)).catch(() => {});
