@@ -13,15 +13,3 @@ export function journalFileName(locationDir) {
     .digest('hex')
   return `journal-${digest.slice(0, 8)}.jsonl`
 }
-
-/**
- * Next-prompt suggestion of one session. Two sessions in the same folder each
- * keep their own file, so one never hides the other's card.
- */
-export function suggestionFileName(locationDir, sessionID = '') {
-  const base = journalFileName(locationDir)
-    .replace('journal-', 'suggestion-')
-    .replace('.jsonl', '')
-  const safe = String(sessionID ?? '').replace(/[^A-Za-z0-9_-]/g, '')
-  return safe ? `${base}-${safe}.json` : `${base}.json`
-}

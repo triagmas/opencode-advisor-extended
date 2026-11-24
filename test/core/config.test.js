@@ -12,15 +12,38 @@ test('пустой конфиг даёт дефолты и ошибку про �
 })
 
 test('полная пара моделей проходит, лишние ключи отбрасываются', () => {
-  const { config, errors } = normalizeConfig({ provider: 'opencode-go', model: 'x', junk: 1 })
+  const { config, errors } = normalizeConfig({
+    provider: 'opencode-go',
+    model: 'x',
+    junk: 1,
+  })
   assert.deepEqual(errors, [])
   assert.equal(config.junk, undefined)
-  assert.deepEqual(modelRef(config), { providerID: 'opencode-go', modelID: 'x' })
+  assert.deepEqual(modelRef(config), {
+    providerID: 'opencode-go',
+    modelID: 'x',
+  })
 })
 
 test('границы значений зажимаются', () => {
-  const { config } = normalizeConfig({ immuneTurns: -5, noteMaxChars: 99999, maxDeltaMessages: 'нет' })
+  const { config } = normalizeConfig({
+    immuneTurns: -5,
+    noteMaxChars: 99999,
+    maxDeltaMessages: 'нет',
+  })
   assert.equal(config.immuneTurns, 0)
   assert.equal(config.noteMaxChars, 4096)
   assert.equal(config.maxDeltaMessages, DEFAULTS.maxDeltaMessages)
+})
+
+test('настройки карточки и подсказки отброшены вместе с панелью', () => {
+  const { config } = normalizeConfig({
+    nextPrompt: true,
+    nextPromptMaxChars: 300,
+    provider: 'p',
+    model: 'm',
+  })
+  assert.equal(config.nextPrompt, undefined)
+  assert.equal(config.nextPromptMaxChars, undefined)
+  assert.equal('nextPrompt' in DEFAULTS, false)
 })

@@ -58,7 +58,10 @@ test("nit уходит в entry, агент не будится", async () => {
   });
   assert.equal(r.kind, "delivered");
   assert.equal(ctx.calls.synthetic.length, 0);
-  assert.match(ctx.calls.entry[0].value, /переименуй/);
+  assert.equal(
+    ctx.calls.entry[0].value,
+    "Advisor · nit: переименуй helper",
+  );
 });
 
 test("шаг без текста не зовёт модель", async () => {
@@ -92,7 +95,7 @@ test("blocker уходит synthetic со steer", async () => {
     now: 1,
   });
   assert.equal(ctx.calls.synthetic[0].delivery, "steer");
-  assert.match(ctx.calls.synthetic[0].text, /^\[advisor:blocker\]/);
+  assert.match(ctx.calls.synthetic[0].text, /^Advisor · blocker: /);
 });
 
 test("мусорный ответ даёт dropped unparsed", async () => {

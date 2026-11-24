@@ -1,54 +1,24 @@
 {
-  "name": "opencode-advisor-extended",
-  "version": "0.1.0",
+  "name": "opencode-advisor",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "OpenChamber extension: a reviewer model reads the agent's turns and puts a graded note into its context.",
+  "description": "OpenCode plugin: a reviewer model reads the agent's turns and puts a graded note into its context.",
   "license": "MIT",
+  "exports": {
+    ".": "./plugin/index.js"
+  },
+  "files": [
+    "plugin",
+    "src"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test",
     "lint": "oxlint .",
     "format": "prettier --write ."
   },
-  "openchamber": {
-    "apiVersion": 1,
-    "engines": {
-      "openchamber": ">=2.5.0"
-    },
-    "id": "advisor",
-    "name": "Advisor",
-    "icon": "sparkling",
-    "contributes": {
-      "panel": {
-        "id": "advisor",
-        "name": "Advisor",
-        "icon": "sparkling",
-        "entry": "panel/index.html"
-      },
-      "statusSection": {
-        "entry": "status/index.html",
-        "title": "Advisor",
-        "height": 200
-      },
-      "blocks": [
-        {
-          "name": "AdvisorNext",
-          "description": "Advisor's next-step card with check and cross: put the suggestion into the composer, or hide it.",
-          "args": [],
-          "entry": "block/index.html",
-          "height": 44
-        }
-      ],
-      "filesystem": [
-        "~/.local/state/openchamber-advisor/**",
-        "~/.config/openchamber-advisor/**"
-      ],
-      "opencodePlugin": "plugin"
-    }
-  },
   "devDependencies": {
-    "@openchamber/sdk": "^2.7.3",
     "@opencode/plugin": "^2.3.2",
     "esbuild": "^0.28.2",
     "oxlint": "^1.94.0",

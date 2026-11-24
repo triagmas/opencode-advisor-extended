@@ -1,8 +1,8 @@
 // src/plugin/index.js
 import { watch } from "node:fs";
-import { mkdir as mkdir2, readFile as readFile2, rename as rename2, unlink, writeFile } from "node:fs/promises";
+import { mkdir as mkdir3, readFile as readFile2, rename as rename2, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname as dirname2, basename, join, resolve } from "node:path";
+import { basename, dirname as dirname2, join as join2, resolve } from "node:path";
 
 // src/core/command.js
 var USAGE = { kind: "usage" };
@@ -35,15 +35,12 @@ var DEFAULTS = Object.freeze({
   immuneTurns: 3,
   maxDeltaMessages: 60,
   noteMaxChars: 768,
-  proseFallback: false,
-  nextPrompt: true,
-  nextPromptMaxChars: 120
+  proseFallback: false
 });
 var LIMITS = {
   immuneTurns: { min: 0, max: 50 },
   maxDeltaMessages: { min: 0, max: 500 },
-  noteMaxChars: { min: 128, max: 4096 },
-  nextPromptMaxChars: { min: 50, max: 2e3 }
+  noteMaxChars: { min: 128, max: 4096 }
 };
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -64,15 +61,26 @@ function normalizeConfig(raw) {
     enabled: bool(input.enabled, DEFAULTS.enabled),
     provider: text(input.provider),
     model: text(input.model),
-    immuneTurns: number(input.immuneTurns, DEFAULTS.immuneTurns, LIMITS.immuneTurns),
-    maxDeltaMessages: number(input.maxDeltaMessages, DEFAULTS.maxDeltaMessages, LIMITS.maxDeltaMessages),
-    noteMaxChars: number(input.noteMaxChars, DEFAULTS.noteMaxChars, LIMITS.noteMaxChars),
-    proseFallback: bool(input.proseFallback, DEFAULTS.proseFallback),
-    nextPrompt: bool(input.nextPrompt, DEFAULTS.nextPrompt),
-    nextPromptMaxChars: number(input.nextPromptMaxChars, DEFAULTS.nextPromptMaxChars, LIMITS.nextPromptMaxChars)
+    immuneTurns: number(
+      input.immuneTurns,
+      DEFAULTS.immuneTurns,
+      LIMITS.immuneTurns
+    ),
+    maxDeltaMessages: number(
+      input.maxDeltaMessages,
+      DEFAULTS.maxDeltaMessages,
+      LIMITS.maxDeltaMessages
+    ),
+    noteMaxChars: number(
+      input.noteMaxChars,
+      DEFAULTS.noteMaxChars,
+      LIMITS.noteMaxChars
+    ),
+    proseFallback: bool(input.proseFallback, DEFAULTS.proseFallback)
   };
   const errors = [];
-  if (config.provider === "" || config.model === "") errors.push("model-missing");
+  if (config.provider === "" || config.model === "")
+    errors.push("model-missing");
   return { config, errors };
 }
 function modelRef(config) {
@@ -104,11 +112,6 @@ var ROTATE_LINES = 5e3;
 function journalFileName(locationDir) {
   const digest = createHash("sha256").update(String(locationDir ?? "")).digest("hex");
   return `journal-${digest.slice(0, 8)}.jsonl`;
-}
-function suggestionFileName(locationDir, sessionID = "") {
-  const base = journalFileName(locationDir).replace("journal-", "suggestion-").replace(".jsonl", "");
-  const safe = String(sessionID ?? "").replace(/[^A-Za-z0-9_-]/g, "");
-  return safe ? `${base}-${safe}.json` : `${base}.json`;
 }
 
 // src/core/journal.js
@@ -148,141 +151,66 @@ async function appendRecord(path, record, fsOps = nodeFs) {
   });
 }
 
-// src/core/providers.js
-function buildProvidersSnapshot(models, providers, now = Date.now()) {
-  const byId = /* @__PURE__ */ new Map();
-  const ensure = (id) => {
-    let provider = byId.get(id);
-    if (!provider) {
-      provider = { id, name: id, models: [] };
-      byId.set(id, provider);
-    }
-    return provider;
+// src/core/migrate.js
+import { copyFile, mkdir as mkdir2, readdir } from "node:fs/promises";
+import { join } from "node:path";
+var nodeFs2 = { copyFile, mkdir: mkdir2, readdir };
+function legacyPaths(homeDir) {
+  const home = String(homeDir ?? "");
+  return {
+    configDir: join(home, ".config", "openchamber-advisor"),
+    stateDir: join(home, ".local", "state", "openchamber-advisor")
   };
-  for (const provider of Array.isArray(providers) ? providers : []) {
-    if (!provider?.id) continue;
-    const target = ensure(provider.id);
-    if (typeof provider.name === "string" && provider.name !== "")
-      target.name = provider.name;
-  }
-  for (const model of Array.isArray(models) ? models : []) {
-    const modelID = model?.modelID ?? model?.id;
-    const providerID = model?.providerID;
-    if (!modelID || !providerID) continue;
-    if (model?.type && model.type !== "chat") continue;
-    const provider = ensure(providerID);
-    if (provider.models.some((item) => item.id === modelID)) continue;
-    provider.models.push({ id: modelID, name: model?.name || modelID });
-  }
-  const list = [...byId.values()].filter((provider) => provider.models.length > 0).sort((left, right) => left.name.localeCompare(right.name, "ru"));
-  for (const provider of list) {
-    provider.models.sort(
-      (left, right) => left.name.localeCompare(right.name, "ru")
+}
+async function migrateLegacyData({
+  homeDir,
+  configDir,
+  stateDir,
+  fsOps = nodeFs2
+}) {
+  const legacy = legacyPaths(homeDir);
+  let config = false;
+  let journals = 0;
+  const copy = async (from, to) => {
+    try {
+      await fsOps.copyFile(
+        from,
+        to,
+        1
+        /* COPYFILE_EXCL */
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const names = async (dir, matches) => {
+    try {
+      return (await fsOps.readdir(dir)).filter(matches);
+    } catch {
+      return [];
+    }
+  };
+  const configName = "config.json";
+  if ((await names(legacy.configDir, (name) => name === configName)).length > 0) {
+    await fsOps.mkdir(configDir, { recursive: true });
+    config = await copy(
+      join(legacy.configDir, configName),
+      join(configDir, configName)
     );
   }
-  return { at: now, providers: list };
-}
-
-// src/core/next-block.js
-var NEXT_DISPLAYS = ["card", "line", "off"];
-var NEXT_BLOCK_INSTRUCTION = [
-  "Advisor next-step card: end every reply with one fenced openui-lang block",
-  "that draws only the card, exactly like this:",
-  "```openui-lang",
-  "root = Stack([AdvisorNext()])",
-  "```",
-  "Put it last and do not describe it in text."
-].join("\n");
-var NEXT_LINE_INSTRUCTION = [
-  "Advisor line: when this request carries an advisor note, end every reply",
-  "with that note repeated on its own line, unchanged. It already starts with",
-  '"Advisor \xB7 ". Add nothing when there is no note, and never invent one.'
-].join("\n");
-function nextBlockInstruction(enabled) {
-  return enabled ? NEXT_BLOCK_INSTRUCTION : "";
-}
-function nextLineInstruction(enabled) {
-  return enabled ? NEXT_LINE_INSTRUCTION : "";
-}
-function normalizeNextDisplay(value) {
-  return NEXT_DISPLAYS.includes(value) ? value : "card";
-}
-function formatNote(severity, note, display = "card") {
-  return display === "line" ? `Advisor \xB7 ${severity}: ${note}` : `[advisor:${severity}] ${note}`;
-}
-
-// src/core/next-prompt.js
-var NEXT_PROMPT_MAX_CHARS = 120;
-var NEXT_PROMPT_LIMITS = { min: 50, max: 2e3 };
-var SYSTEM = [
-  '\u0412\u0435\u0440\u043D\u0438 \u0440\u043E\u0432\u043D\u043E \u043E\u0434\u0438\u043D JSON-\u043E\u0431\u044A\u0435\u043A\u0442 \u0441 \u0435\u0434\u0438\u043D\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u043C \u0441\u0442\u0440\u043E\u043A\u043E\u0432\u044B\u043C \u043F\u043E\u043B\u0435\u043C: {"suggestion": "..."}.',
-  "suggestion \u2014 \u043E\u0434\u043D\u043E \u043A\u043E\u0440\u043E\u0442\u043A\u043E\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u043E\u0442 \u043B\u0438\u0446\u0430 \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0430, \u043A\u043E\u0442\u043E\u0440\u043E\u0435 \u043C\u043E\u0436\u043D\u043E \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u0442\u044C \u0430\u0433\u0435\u043D\u0442\u0443 \u0431\u0435\u0437 \u043F\u0440\u0430\u0432\u043E\u043A, \u0447\u0442\u043E\u0431\u044B \u043F\u0440\u043E\u0434\u043E\u043B\u0436\u0438\u0442\u044C \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u0443\u044E \u043D\u0435\u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043D\u043D\u0443\u044E \u0440\u0430\u0431\u043E\u0442\u0443, \u043A\u043E\u0442\u043E\u0440\u0443\u044E \u0447\u0435\u043B\u043E\u0432\u0435\u043A \u0443\u0436\u0435 \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u043B.",
-  'suggestion \u043F\u0443\u0441\u0442\u0430\u044F (""), \u0435\u0441\u043B\u0438: \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0439 \u0437\u0430\u043F\u0440\u043E\u0441 \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D; \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0438\u0439 \u0448\u0430\u0433 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u0440\u0435\u0448\u0435\u043D\u0438\u044F \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0430 (\u0432\u044B\u0431\u0440\u0430\u0442\u044C \u0432\u0430\u0440\u0438\u0430\u043D\u0442, \u043E\u0434\u043E\u0431\u0440\u0438\u0442\u044C, \u043F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C \u0440\u0443\u043A\u0430\u043C\u0438); \u0432 \u043A\u043E\u043D\u0442\u0435\u043A\u0441\u0442\u0435 \u043D\u0435\u0442 \u043D\u0435\u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043D\u043D\u043E\u0439 \u0437\u0430\u043F\u0440\u043E\u0448\u0435\u043D\u043D\u043E\u0439 \u0440\u0430\u0431\u043E\u0442\u044B. \u0417\u0430\u0432\u0435\u0440\u0448\u0451\u043D\u043D\u0430\u044F \u0440\u0430\u0431\u043E\u0442\u0430 \u2014 \u043D\u043E\u0440\u043C\u0430\u043B\u044C\u043D\u044B\u0439 \u0438\u0441\u0445\u043E\u0434.',
-  "\u041F\u0440\u043E\u0441\u044C\u0431\u0430 \u043F\u0440\u043E\u0430\u043D\u0430\u043B\u0438\u0437\u0438\u0440\u043E\u0432\u0430\u0442\u044C, \u043E\u0431\u044A\u044F\u0441\u043D\u0438\u0442\u044C \u0438\u043B\u0438 \u043F\u043E\u0440\u0435\u043A\u043E\u043C\u0435\u043D\u0434\u043E\u0432\u0430\u0442\u044C \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0430 \u0441\u0430\u043C\u0438\u043C \u0430\u043D\u0430\u043B\u0438\u0437\u043E\u043C, \u0435\u0441\u043B\u0438 \u0447\u0435\u043B\u043E\u0432\u0435\u043A \u043D\u0435 \u043F\u0440\u043E\u0441\u0438\u043B \u0435\u0449\u0451 \u0438 \u0441\u0434\u0435\u043B\u0430\u0442\u044C. \u041F\u0440\u0435\u0434\u043B\u043E\u0436\u0435\u043D\u0438\u0435, \u043F\u043B\u0430\u043D \u0438\u043B\u0438 \u043E\u0433\u043E\u0432\u043E\u0440\u043A\u0430 \u2014 \u043D\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043D\u0438\u0435 \u043D\u0430 \u043D\u043E\u0432\u0443\u044E \u0437\u0430\u0434\u0430\u0447\u0443.",
-  "\u0415\u0441\u043B\u0438 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0430\u0433\u0435\u043D\u0442\u0430 \u0441\u0430\u043C\u043E \u043D\u0430\u0437\u044B\u0432\u0430\u0435\u0442 \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0438\u0439 \u0448\u0430\u0433 \u0438\u043B\u0438 \u043F\u0440\u0435\u0434\u043B\u0430\u0433\u0430\u0435\u0442 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435, \u0438 \u043E\u043D\u043E \u0437\u0430 \u0430\u0433\u0435\u043D\u0442\u043E\u043C, \u2014 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0438 \u0438\u043C\u0435\u043D\u043D\u043E \u0435\u0433\u043E: \u044D\u0442\u043E \u0438 \u0435\u0441\u0442\u044C \u043E\u0441\u0442\u0430\u0432\u0448\u0430\u044F\u0441\u044F \u0440\u0430\u0431\u043E\u0442\u0430, \u0434\u0430\u0436\u0435 \u0435\u0441\u043B\u0438 \u043F\u0440\u043E\u0441\u044C\u0431\u0430 \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0430 \u0443\u0436\u0435 \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0430.",
-  "\u041D\u0435 \u0432\u043E\u0437\u0432\u0440\u0430\u0449\u0430\u0439\u0441\u044F \u043A \u0441\u0442\u0430\u0440\u044B\u043C \u043F\u0440\u043E\u0441\u044C\u0431\u0430\u043C, \u0435\u0441\u043B\u0438 \u0447\u0435\u043B\u043E\u0432\u0435\u043A \u0441\u043C\u0435\u043D\u0438\u043B \u0442\u0435\u043C\u0443.",
-  "\u041F\u0438\u0448\u0438 \u043D\u0430 \u044F\u0437\u044B\u043A\u0435 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0433\u043E \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u0430; \u043A\u043E\u0434, \u043F\u0443\u0442\u0438 \u0438 \u0442\u0435\u0445\u043D\u0438\u0447\u0435\u0441\u043A\u0438\u0435 \u0438\u043C\u0435\u043D\u0430 \u043D\u0435 \u043F\u0435\u0440\u0435\u0432\u043E\u0434\u0438.",
-  "\u041F\u0440\u0435\u0434\u043B\u0430\u0433\u0430\u0439 \u0442\u043E\u043B\u044C\u043A\u043E \u0442\u043E, \u0447\u0442\u043E \u0430\u0433\u0435\u043D\u0442 \u043C\u043E\u0436\u0435\u0442 \u0441\u0434\u0435\u043B\u0430\u0442\u044C \u0432 \u044D\u0442\u043E\u0439 \u0441\u0435\u0441\u0441\u0438\u0438; \u0435\u0441\u043B\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u0437\u0430 \u0447\u0435\u043B\u043E\u0432\u0435\u043A\u043E\u043C \u2014 \u043F\u0443\u0441\u0442\u0430\u044F \u0441\u0442\u0440\u043E\u043A\u0430."
-].join("\n");
-function buildNextPromptPrompt(transcript) {
-  const body = String(transcript ?? "").slice(0, 24e3);
-  return `${SYSTEM}
-
-\u041D\u0435\u0434\u0430\u0432\u043D\u0438\u0435 \u0445\u043E\u0434\u044B, \u043E\u0442 \u0441\u0442\u0430\u0440\u044B\u0445 \u043A \u043D\u043E\u0432\u044B\u043C:
-
-${body}
-
---- \u041A\u043E\u043D\u0435\u0446 \u043F\u0435\u0440\u0435\u043F\u0438\u0441\u043A\u0438 ---
-
-\u0412\u0435\u0440\u043D\u0438 JSON \u0441 \u043F\u043E\u043B\u0435\u043C suggestion.`;
-}
-function fromJson(text2) {
-  const start = text2.indexOf("{");
-  const end = text2.lastIndexOf("}");
-  if (start !== -1 && end > start) {
-    try {
-      const parsed = JSON.parse(text2.slice(start, end + 1));
-      if (parsed && typeof parsed.suggestion === "string")
-        return parsed.suggestion;
-    } catch {
+  const journalNames = await names(
+    legacy.stateDir,
+    (name) => name.startsWith("journal-")
+  );
+  if (journalNames.length > 0) {
+    await fsOps.mkdir(stateDir, { recursive: true });
+    for (const name of journalNames) {
+      if (await copy(join(legacy.stateDir, name), join(stateDir, name)))
+        journals += 1;
     }
   }
-  const match = text2.match(/"suggestion"\s*:\s*"([^"]*)/);
-  if (match) return match[1];
-  return void 0;
-}
-function parseSuggestion(text2, maxChars = NEXT_PROMPT_MAX_CHARS) {
-  const raw = String(text2 ?? "");
-  if (raw.trim() === "") return null;
-  const fromObject = fromJson(raw);
-  const candidate = fromObject !== void 0 ? fromObject : raw;
-  if (candidate.trim() === "") return null;
-  let line = candidate.split("\n").map((part) => part.trim()).find((part) => part !== "");
-  if (!line) return null;
-  line = line.replace(/^["'«»“”\s]+|["'«»“”\s]+$/g, "");
-  if (/^none$/i.test(line)) return null;
-  if (!/[\p{L}\p{N}]/u.test(line)) return null;
-  const limit = Math.min(
-    NEXT_PROMPT_LIMITS.max,
-    Math.max(NEXT_PROMPT_LIMITS.min, Number(maxChars) || NEXT_PROMPT_MAX_CHARS)
-  );
-  const chars = [...line];
-  if (chars.length <= limit) return line;
-  const cut = chars.slice(0, limit).join("");
-  const space = cut.lastIndexOf(" ");
-  return (space > limit * 0.6 ? cut.slice(0, space) : cut).trim();
-}
-function agentOfferSuggestion(text2, maxChars = NEXT_PROMPT_MAX_CHARS) {
-  const lines = String(text2 ?? "").split("\n");
-  const offer = /^\s*(?:[-*]\s*)?(?:\*\*)?(?:следующий шаг|next step|дальше)(?:\*\*)?\s*[:—–-]\s*(.+)$/iu;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const match = lines[index].match(offer);
-    if (!match) continue;
-    const candidate = match[1].replace(/\*\*/g, "").trim();
-    if (candidate === "") return null;
-    return parseSuggestion(JSON.stringify({ suggestion: candidate }), maxChars);
-  }
-  return null;
+  return { config, journals };
 }
 
 // src/core/limits.js
@@ -315,36 +243,6 @@ function markReviewed(state, now, immuneTurns) {
   state.immuneTurns = immuneTurns;
   state.inFlight = false;
   state.cooldownUntil = now;
-}
-
-// src/core/status.js
-import { createHash as createHash2 } from "node:crypto";
-
-// src/core/status-format.js
-function emptyCounters() {
-  return {
-    calls: 0,
-    drops: { empty: 0, unparsed: 0, error: 0 },
-    // Separate on purpose: a silent card pipeline must not look like a silent
-    // reviewer. `calls` counts reviewer calls, `suggest.calls` prediction calls.
-    suggest: { calls: 0, empty: 0, error: 0 }
-  };
-}
-function buildStatus(prev = {}, patch = {}, now = Date.now()) {
-  const base = { ...emptyCounters(), ...prev };
-  return {
-    ...base,
-    ...patch,
-    drops: { ...base.drops, ...patch.drops ?? {} },
-    suggest: { ...base.suggest, ...patch.suggest ?? {} },
-    at: now
-  };
-}
-
-// src/core/status.js
-function statusFileName(locationDir) {
-  const digest = createHash2("sha256").update(String(locationDir ?? "")).digest("hex");
-  return `status-${digest.slice(0, 8)}.json`;
 }
 
 // src/core/delta.js
@@ -445,6 +343,11 @@ function createEmissionGuard() {
   };
 }
 
+// src/core/note.js
+function formatNote(severity, note) {
+  return `Advisor \xB7 ${severity}: ${note}`;
+}
+
 // src/plugin/prompts.js
 var REVIEWER_SYSTEM = `\u0422\u044B \u2014 \u0440\u0435\u0432\u044C\u044E\u0435\u0440 \u0445\u043E\u0434\u0430 \u0430\u0433\u0435\u043D\u0442\u0430 \u0432 \u0440\u0435\u0434\u0430\u043A\u0442\u043E\u0440\u0435 \u043A\u043E\u0434\u0430. \u0422\u0435\u0431\u0435 \u0434\u0430\u044E\u0442 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0435 \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u044F \u0441\u0435\u0441\u0441\u0438\u0438: \u0447\u0442\u043E \u043F\u0440\u043E\u0441\u0438\u043B \u0447\u0435\u043B\u043E\u0432\u0435\u043A, \u0447\u0442\u043E \u043E\u0442\u0432\u0435\u0442\u0438\u043B \u0430\u0433\u0435\u043D\u0442 \u0438 \u043A\u0430\u043A\u0438\u0435 \u0432\u044B\u0437\u043E\u0432\u044B \u0438\u043D\u0441\u0442\u0440\u0443\u043C\u0435\u043D\u0442\u043E\u0432 \u043E\u043D \u0441\u0434\u0435\u043B\u0430\u043B.
 
@@ -502,7 +405,6 @@ async function runReview({
   config,
   sessionID,
   state,
-  display = "card",
   now = Date.now()
 }) {
   const model = modelRef(config);
@@ -579,7 +481,7 @@ ${buildReviewPrompt(transcript)}`;
       advance();
       return { kind: "skipped", reason: "duplicate", ms };
     }
-    const delivered = formatNote(frame.severity, note, display);
+    const delivered = formatNote(frame.severity, note);
     try {
       if (frame.severity !== "nit") {
         await ctx.session.synthetic({
@@ -606,16 +508,9 @@ ${buildReviewPrompt(transcript)}`;
 }
 
 // src/plugin/index.js
-var PLUGIN_VERSION = "0.1.0";
-var HEARTBEAT_MS = 1e4;
+var PLUGIN_VERSION = "0.2.0";
 var ANSWER_MAX = 500;
-var NOTE_KEY2 = "advisor-note";
-var EVENT_TYPES = [
-  "session.step.started",
-  "session.step.ended",
-  "session.execution.succeeded",
-  "session.execution.failed"
-];
+var EVENT_TYPES = ["session.step.started", "session.step.ended"];
 var USAGE_TEXT = "advisor: on | off | status | model set <provider>/<model> | model reset";
 function modelLabel(config) {
   const ref = modelRef(config);
@@ -630,7 +525,7 @@ async function readJson(path) {
   }
 }
 async function writeJsonAtomic(path, value) {
-  await mkdir2(dirname2(path), { recursive: true });
+  await mkdir3(dirname2(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
   await writeFile(temp, JSON.stringify(value, null, 2) + "\n");
   await rename2(temp, path);
@@ -638,27 +533,19 @@ async function writeJsonAtomic(path, value) {
 async function setup(ctx) {
   const options = ctx.options ?? {};
   const home = options.homeDir ?? homedir();
-  const configDir = options.configDir ?? join(home, ".config", "openchamber-advisor");
-  const stateDir = options.stateDir ?? join(home, ".local", "state", "openchamber-advisor");
+  const configDir = options.configDir ?? join2(home, ".config", "opencode-advisor");
+  const stateDir = options.stateDir ?? join2(home, ".local", "state", "opencode-advisor");
   const locationDir = resolve(String(ctx.location?.directory ?? process.cwd()));
-  const display = normalizeNextDisplay(options.nextDisplay);
-  const configPath = join(configDir, "config.json");
-  const statusPath = join(stateDir, statusFileName(locationDir));
-  const journalPath = join(stateDir, journalFileName(locationDir));
-  const legacySuggestionPath = join(stateDir, suggestionFileName(locationDir));
-  const suggestionPathFor = (sessionID) => join(stateDir, suggestionFileName(locationDir, sessionID));
-  await mkdir2(configDir, { recursive: true });
-  await mkdir2(stateDir, { recursive: true });
-  const legacySuggestion = await readJson(legacySuggestionPath);
-  if (legacySuggestion?.sessionID) {
-    await writeJsonAtomic(
-      suggestionPathFor(legacySuggestion.sessionID),
-      legacySuggestion
-    ).catch(() => {
-    });
+  await mkdir3(configDir, { recursive: true });
+  await mkdir3(stateDir, { recursive: true });
+  if (options.migrate !== false) {
+    await migrateLegacyData({ homeDir: home, configDir, stateDir }).catch(
+      () => {
+      }
+    );
   }
-  await unlink(legacySuggestionPath).catch(() => {
-  });
+  const configPath = join2(configDir, "config.json");
+  const journalPath = join2(stateDir, journalFileName(locationDir));
   let raw = await readJson(configPath);
   if (raw === null) {
     raw = { ...DEFAULTS };
@@ -673,9 +560,6 @@ async function setup(ctx) {
     if (!state) {
       state = {
         lastSeenID: null,
-        lastSuggestAt: 0,
-        suggesting: false,
-        suggestQueued: false,
         turns: 0,
         immuneTurns: config.immuneTurns,
         inFlight: false,
@@ -687,59 +571,10 @@ async function setup(ctx) {
     }
     return state;
   };
-  const counters = emptyCounters();
+  const counters = { calls: 0, drops: { empty: 0, unparsed: 0, error: 0 } };
   let lastAdviceAt = null;
   let lastMs = null;
-  let cooldownUntil = null;
-  let status = buildStatus(
-    {
-      ...emptyCounters(),
-      startedAt: Date.now(),
-      pluginVersion: PLUGIN_VERSION
-    },
-    {},
-    Date.now()
-  );
-  let queue = Promise.resolve();
-  const flush = (patch = {}) => {
-    status = buildStatus(status, patch, Date.now());
-    const snapshot = { ...status, at: Date.now() };
-    queue = queue.then(() => writeJsonAtomic(statusPath, snapshot)).catch(() => {
-    });
-    return queue;
-  };
-  await flush({
-    enabled: config.enabled,
-    model: modelLabel(config),
-    reason: errors[0] ?? null,
-    appVersion: ctx.app?.version ?? null,
-    lastAdviceAt: null,
-    lastMs: null,
-    cooldownUntil: null
-  });
-  const providersPath = join(stateDir, "providers.json");
-  let snapshotTick = 0;
-  async function writeProviders() {
-    try {
-      const [models, providers] = await Promise.all([
-        ctx.model?.list?.({ location: { directory: locationDir } }),
-        ctx.provider?.list?.({ location: { directory: locationDir } })
-      ]);
-      const snapshot = buildProvidersSnapshot(
-        models?.data ?? models,
-        providers?.data ?? providers
-      );
-      if (snapshot.providers.length > 0)
-        await writeJsonAtomic(providersPath, snapshot);
-    } catch {
-    }
-  }
-  void writeProviders();
-  const heartbeat = setInterval(() => {
-    void flush();
-    if (++snapshotTick % 6 === 0) void writeProviders();
-  }, HEARTBEAT_MS);
-  heartbeat.unref?.();
+  let lastSkip = null;
   async function reloadConfig() {
     const fresh = await readJson(configPath);
     if (fresh === null) return;
@@ -750,11 +585,6 @@ async function setup(ctx) {
       state.immuneTurns = config.immuneTurns;
       state.muted = false;
     }
-    await flush({
-      enabled: config.enabled,
-      model: modelLabel(config),
-      reason: errors[0] ?? null
-    });
   }
   let watcher;
   try {
@@ -777,19 +607,18 @@ async function setup(ctx) {
     await reloadConfig();
   }
   const reply = (body) => {
-    const missing = errors.includes("model-missing") ? " \u041C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0437\u0430\u0434\u0430\u043D\u0430 (model-missing): \u0443\u043A\u0430\u0436\u0438\u0442\u0435 provider/model \u0432 \u043F\u0430\u043D\u0435\u043B\u0438 \u0438\u043B\u0438 /advisor model set <provider>/<model>." : "";
+    const missing = errors.includes("model-missing") ? " \u041C\u043E\u0434\u0435\u043B\u044C \u043D\u0435 \u0437\u0430\u0434\u0430\u043D\u0430 (model-missing): \u0443\u043A\u0430\u0436\u0438\u0442\u0435 provider/model \u0432 config.json \u0438\u043B\u0438 /advisor model set <provider>/<model>." : "";
     return limitText(`Advisor: ${body}${missing}`, ANSWER_MAX);
   };
   function statusLine(session) {
     const state = config.enabled ? "\u0432\u043A\u043B\u044E\u0447\u0451\u043D" : "\u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D";
     const model = modelLabel(config) ?? "\u043D\u0435\u0442 (model-missing)";
-    const last = status.lastAdviceAt ? new Date(status.lastAdviceAt).toLocaleTimeString() : "\u0441\u043E\u0432\u0435\u0442\u043E\u0432 \u0435\u0449\u0451 \u043D\u0435 \u0431\u044B\u043B\u043E";
-    const latency = typeof status.lastMs === "number" ? `${status.lastMs} \u043C\u0441` : "\u2014";
+    const last = lastAdviceAt ? new Date(lastAdviceAt).toLocaleTimeString() : "\u0441\u043E\u0432\u0435\u0442\u043E\u0432 \u0435\u0449\u0451 \u043D\u0435 \u0431\u044B\u043B\u043E";
+    const latency = typeof lastMs === "number" ? `${lastMs} \u043C\u0441` : "\u2014";
     const mute = session?.disabled ? "\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D\u0430" : session?.muted ? "\u043C\u043E\u043B\u0447\u0438\u0442 \u043F\u043E\u0441\u043B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438 \u043C\u043E\u0434\u0435\u043B\u0438" : "\u0441\u0435\u0441\u0441\u0438\u044F \u0432\u043A\u043B\u044E\u0447\u0435\u043D\u0430";
-    const drop = status.drops.empty + status.drops.unparsed + status.drops.error;
-    const suggest = status.suggest ? `, \u043F\u043E\u0434\u0441\u043A\u0430\u0437\u043E\u043A: ${status.suggest.calls} (\u043F\u0443\u0441\u0442\u043E ${status.suggest.empty}, \u043E\u0448\u0438\u0431\u043E\u043A ${status.suggest.error})` : "";
-    const skip = status.lastSkip?.reason ? `; \u043F\u0440\u043E\u043F\u0443\u0441\u043A: ${status.lastSkip.reason}` : "";
-    return `\u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435: ${state}, ${mute}; \u043C\u043E\u0434\u0435\u043B\u044C: ${model}; \u0432\u044B\u0437\u043E\u0432\u043E\u0432: ${status.calls}; \u0434\u0440\u043E\u043F\u043E\u0432: ${drop}${suggest}${skip}; \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430: ${latency}; ${last}`;
+    const drop = counters.drops.empty + counters.drops.unparsed + counters.drops.error;
+    const skip = lastSkip?.reason ? `; \u043F\u0440\u043E\u043F\u0443\u0441\u043A: ${lastSkip.reason}` : "";
+    return `\u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435: ${state}, ${mute}; \u043C\u043E\u0434\u0435\u043B\u044C: ${model}; \u0432\u044B\u0437\u043E\u0432\u043E\u0432: ${counters.calls}; \u0434\u0440\u043E\u043F\u043E\u0432: ${drop}${skip}; \u0437\u0430\u0434\u0435\u0440\u0436\u043A\u0430: ${latency}; ${last}`;
   }
   async function runCommand({ sessionID, prompt }) {
     const parsed = parseCommand(prompt?.text ?? "");
@@ -847,39 +676,29 @@ async function setup(ctx) {
     try {
       await ctx.session.instructions?.entry?.remove({
         sessionID,
-        key: NOTE_KEY2
+        key: "advisor-note"
       });
     } catch {
     }
   }
   async function handleEvent(event) {
-    switch (event?.type) {
-      case "session.step.started": {
-        const sessionID = event.data?.sessionID;
-        if (!sessionID) return;
-        stateOf(sessionID).turns += 1;
-        await clearNote(sessionID);
-        return;
-      }
-      case "session.step.ended": {
-        const sessionID = event.data?.sessionID;
-        if (!sessionID) return;
-        await onStepEnded(sessionID);
-        return;
-      }
-      case "session.execution.succeeded":
-      case "session.execution.failed": {
-        const sessionID = event.data?.sessionID;
-        if (!sessionID) return;
-        await suggestNext(sessionID, true);
-        return;
-      }
-      default:
+    if (event?.type === "session.step.started") {
+      const sessionID = event.data?.sessionID;
+      if (!sessionID) return;
+      stateOf(sessionID).turns += 1;
+      await clearNote(sessionID);
+      return;
+    }
+    if (event?.type === "session.step.ended") {
+      const sessionID = event.data?.sessionID;
+      if (!sessionID) return;
+      await onStepEnded(sessionID);
     }
   }
   async function onStepEnded(sessionID) {
-    const noteSkip = (reason) => flush({ lastSkip: { reason, at: Date.now() } }).catch(() => {
-    });
+    const noteSkip = (reason) => {
+      lastSkip = { reason, at: Date.now() };
+    };
     const state = stateOf(sessionID);
     if (state.inFlight) return noteSkip("in-flight");
     if (!canReview(state, config, Date.now())) return noteSkip("gate");
@@ -896,34 +715,23 @@ async function setup(ctx) {
     if (info && !shouldReview({ parentID: info.parentID, archived }))
       return noteSkip("subagent");
     if (state.inFlight) return noteSkip("in-flight");
-    const started = Date.now();
     const result = await runReview({
       ctx,
       config,
       sessionID,
       state,
-      display,
-      now: started
+      now: Date.now()
     });
-    if (result.kind === "skipped") void noteSkip(result.reason ?? "skipped");
-    const patch = {};
-    if (result.kind !== "skipped") {
-      counters.calls += 1;
-      patch.calls = counters.calls;
-    }
+    if (result.kind === "skipped") noteSkip(result.reason ?? "skipped");
+    if (result.kind !== "skipped") counters.calls += 1;
     if (result.kind === "dropped") {
       const reason = result.reason === "empty" || result.reason === "unparsed" || result.reason === "error" ? result.reason : "error";
       counters.drops[reason] += 1;
-      patch.drops = { ...counters.drops };
       if (reason === "error") state.muted = true;
     }
     if (result.kind === "delivered") {
       lastAdviceAt = Date.now();
       lastMs = result.ms ?? null;
-      cooldownUntil = state.cooldownUntil;
-      patch.lastAdviceAt = lastAdviceAt;
-      patch.lastMs = lastMs;
-      patch.cooldownUntil = cooldownUntil;
       try {
         await appendRecord(journalPath, {
           kind: "advice",
@@ -938,85 +746,6 @@ async function setup(ctx) {
       } catch {
       }
     }
-    if (Object.keys(patch).length > 0) await flush(patch);
-  }
-  const SUGGEST_EVERY_MS = 9e4;
-  async function suggestNext(sessionID, force = false) {
-    const state = stateOf(sessionID);
-    if (!config.nextPrompt || state.disabled) return;
-    if (state.suggesting) {
-      if (force) state.suggestQueued = true;
-      return;
-    }
-    if (!force && Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS)
-      return;
-    const model = modelRef(config);
-    if (!model) return;
-    try {
-      const info = await ctx.session.get({ sessionID });
-      const sessionDir = info?.location?.directory;
-      if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
-      const archived = Boolean(info?.time?.archived ?? info?.archived);
-      if (!shouldReview({ parentID: info?.parentID, archived })) return;
-    } catch {
-      return;
-    }
-    const countSuggest = async (key) => {
-      counters.suggest[key] += 1;
-      await flush({ suggest: { ...counters.suggest } });
-    };
-    let raw2;
-    try {
-      raw2 = await ctx.session.context({ sessionID });
-    } catch {
-      await countSuggest("error");
-      return;
-    }
-    const messages = (Array.isArray(raw2) ? raw2 : []).map((message) => ({
-      role: message?.type ?? message?.role ?? "user",
-      text: Array.isArray(message?.content) ? message.content.filter(
-        (part) => part?.type === "text" && typeof part.text === "string"
-      ).map((part) => part.text).join("\n") : typeof message?.text === "string" ? message.text : "",
-      description: message?.description
-    })).filter(
-      (message) => !String(message.description ?? "").startsWith("advisor:")
-    ).filter((message) => message.text.trim() !== "").slice(-20);
-    if (messages.length === 0) return;
-    const transcript = messages.map(
-      (message) => `${message.role === "user" ? "\u0447\u0435\u043B\u043E\u0432\u0435\u043A" : "\u0430\u0433\u0435\u043D\u0442"}: ${message.text}`
-    ).join("\n\n");
-    state.suggesting = true;
-    try {
-      await countSuggest("calls");
-      const answer = await ctx.experimental.generate.text({
-        model: { providerID: model.providerID, id: model.modelID },
-        prompt: buildNextPromptPrompt(transcript)
-      });
-      const text2 = parseSuggestion(answer?.text, config.nextPromptMaxChars) ?? agentOfferSuggestion(
-        messages.filter((message) => message.role !== "user").at(-1)?.text,
-        config.nextPromptMaxChars
-      );
-      if (!text2) {
-        await countSuggest("empty");
-        await unlink(suggestionPathFor(sessionID)).catch(() => {
-        });
-        return;
-      }
-      state.lastSuggestAt = Date.now();
-      await writeJsonAtomic(suggestionPathFor(sessionID), {
-        at: state.lastSuggestAt,
-        sessionID,
-        text: text2
-      });
-    } catch {
-      await countSuggest("error");
-    } finally {
-      state.suggesting = false;
-      if (state.suggestQueued) {
-        state.suggestQueued = false;
-        void suggestNext(sessionID, true);
-      }
-    }
   }
   async function consume(iterable) {
     try {
@@ -1028,42 +757,6 @@ async function setup(ctx) {
       }
     } catch {
     }
-  }
-  const ownedSessions = /* @__PURE__ */ new Map();
-  const rememberOwner = (sessionID) => {
-    if (ownedSessions.has(sessionID)) return;
-    ownedSessions.set(sessionID, true);
-    void ctx.session.get({ sessionID }).then((info) => {
-      const sessionDir = info?.location?.directory;
-      ownedSessions.set(
-        sessionID,
-        !sessionDir || resolve(String(sessionDir)) === locationDir
-      );
-    }).catch(() => {
-    });
-  };
-  let disposeContextHook = () => {
-  };
-  const instructionFor = () => {
-    if (display === "card") return nextBlockInstruction(config.nextPrompt);
-    if (display === "line") return nextLineInstruction(config.enabled);
-    return "";
-  };
-  try {
-    const hook = await ctx.session.hook("context", (event) => {
-      if (!Array.isArray(event?.system)) return;
-      const sessionID = event.sessionID;
-      if (!sessionID) return;
-      rememberOwner(sessionID);
-      if (ownedSessions.get(sessionID) === false) return;
-      const text2 = instructionFor();
-      if (!text2) return;
-      event.system.push({ type: "text", text: text2 });
-    });
-    if (typeof hook === "function") disposeContextHook = hook;
-    else if (typeof hook?.dispose === "function")
-      disposeContextHook = () => hook.dispose();
-  } catch {
   }
   const controller = new AbortController();
   const subscription = ctx.event.subscribe({
@@ -1078,7 +771,6 @@ async function setup(ctx) {
     unsubscribe = subscription;
   }
   return async function dispose() {
-    clearInterval(heartbeat);
     controller.abort();
     try {
       watcher?.close();
@@ -1097,11 +789,6 @@ async function setup(ctx) {
     } catch {
     }
     sessions.clear();
-    ownedSessions.clear();
-    try {
-      disposeContextHook();
-    } catch {
-    }
   };
 }
 var index_default = { id: "advisor", setup };

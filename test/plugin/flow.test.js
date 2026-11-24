@@ -5,27 +5,45 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import plugin from '../../src/plugin/index.js'
 
+/**
+ * A finite event stream that resolves `finished` once its last event has been
+ * handled: a generator only resumes past `yield` after the consumer's body for
+ * that value is done, so this waits for the work without a fixed sleep.
+ */
+function streamOf(events) {
+  let markDone
+  const finished = new Promise((resolve) => {
+    markDone = resolve
+  })
+  return {
+    finished,
+    subscribe: () => ({
+      async *[Symbol.asyncIterator]() {
+        for (const event of events) yield event
+        markDone()
+      },
+    }),
+  }
+}
+
 function ctxFor(dir, reply) {
-  const events = [
-    { type: 'session.step.started', data: { sessionID: 's1' } },
-    { type: 'session.step.ended', data: { sessionID: 's1' } },
-  ]
   const entries = []
   const synthetics = []
+  const commands = []
+  const stream = streamOf([
+    { type: 'session.step.started', data: { sessionID: 's1' } },
+    { type: 'session.step.ended', data: { sessionID: 's1' } },
+  ])
   return {
     entries,
     synthetics,
+    _commands: commands,
+    _finished: stream.finished,
     app: { version: '2.3.2' },
-    options: { configDir: join(dir, 'config'), stateDir: join(dir, 'state') },
+    options: { homeDir: dir, configDir: join(dir, 'config'), stateDir: join(dir, 'state') },
     location: { directory: '/proj' },
-    event: {
-      subscribe: () => ({
-        async *[Symbol.asyncIterator]() {
-          for (const event of events) yield event
-        },
-      }),
-    },
-    command: { transform: async (fn) => { fn({ add() {} }); return { dispose() {} } } },
+    event: { subscribe: stream.subscribe },
+    command: { transform: async (fn) => { fn({ add: (c) => commands.push(c) }); return { dispose() {} } } },
     session: {
       get: async () => ({ time: { created: 1 } }),
       context: async () => [
@@ -46,7 +64,7 @@ test('шаг с советом попадает в журнал и счётчи�
 
   const ctx = ctxFor(dir, '{"severity":"concern","guidance":"проверь граничный случай"}')
   const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 120))
+  await ctx._finished
 
   const stateDir = join(dir, 'state')
   const journal = readdirSync(stateDir).find((name) => name.endsWith('.jsonl'))
@@ -56,13 +74,13 @@ test('шаг с советом попадает в журнал и счётчи�
   assert.equal(record.kind, 'advice')
   assert.equal(record.sessionID, 's1')
   assert.equal(record.severity, 'concern')
-
-  const statusFile = readdirSync(stateDir).find((name) => name.startsWith('status-'))
-  const status = JSON.parse(readFileSync(join(stateDir, statusFile), 'utf8'))
-  assert.equal(status.calls, 1)
-  assert.equal(status.lastAdviceAt, record.at)
   assert.equal(ctx.synthetics.length, 1)
   assert.equal(ctx.entries.length, 1)
+  assert.deepEqual(
+    readdirSync(stateDir).filter((name) => !name.endsWith('.jsonl')),
+    [],
+    'nothing but the journal is written',
+  )
 
   await dispose()
 })
@@ -75,7 +93,7 @@ test('шаг сессии из другого location не ревьюится',
   const ctx = ctxFor(dir, '{"severity":"concern","guidance":"чужой совет"}')
   ctx.session.get = async () => ({ time: { created: 1 }, location: { directory: '/other' } })
   const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 120))
+  await ctx._finished
 
   const stateDir = join(dir, 'state')
   const journals = readdirSync(stateDir).filter((name) => name.endsWith('.jsonl'))
@@ -92,19 +110,16 @@ test('две сессии в одном потоке: ревьюится тол�
   writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
 
   const ctx = ctxFor(dir, '{"severity":"concern","guidance":"совет"}')
-  ctx.event = {
-    subscribe: () => ({
-      async *[Symbol.asyncIterator]() {
-        yield { type: 'session.step.ended', data: { sessionID: 'own' } }
-        yield { type: 'session.step.ended', data: { sessionID: 'foreign' } }
-      },
-    }),
-  }
+  const stream = streamOf([
+    { type: 'session.step.ended', data: { sessionID: 'own' } },
+    { type: 'session.step.ended', data: { sessionID: 'foreign' } },
+  ])
+  ctx.event = { subscribe: stream.subscribe }
   const dirs = { own: '/proj', foreign: '/other' }
   ctx.session.get = async ({ sessionID }) => ({ time: { created: 1 }, location: { directory: dirs[sessionID] } })
 
   const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 150))
+  await stream.finished
 
   const stateDir = join(dir, 'state')
   const journal = readdirSync(stateDir).find((name) => name.endsWith('.jsonl'))
@@ -121,16 +136,13 @@ test('две сессии одной папки: совет каждой сес�
   writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
 
   const ctx = ctxFor(dir, '')
-  ctx.event = {
-    subscribe: () => ({
-      async *[Symbol.asyncIterator]() {
-        // Both steps end in one stream, as on a server that serves one folder
-        // with two open sessions.
-        yield { type: 'session.step.ended', data: { sessionID: 'a' } }
-        yield { type: 'session.step.ended', data: { sessionID: 'b' } }
-      },
-    }),
-  }
+  // Both steps end in one stream, as on a server that serves one folder with
+  // two open sessions.
+  const stream = streamOf([
+    { type: 'session.step.ended', data: { sessionID: 'a' } },
+    { type: 'session.step.ended', data: { sessionID: 'b' } },
+  ])
+  ctx.event = { subscribe: stream.subscribe }
   const contexts = {
     a: [{ id: 'a1', type: 'user', text: 'сессия МАРКЕР-А' }],
     b: [{ id: 'b1', type: 'user', text: 'сессия МАРКЕР-Б' }],
@@ -143,7 +155,7 @@ test('две сессии одной папки: совет каждой сес�
   }
 
   const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 200))
+  await stream.finished
 
   const stateDir = join(dir, 'state')
   const journal = readdirSync(stateDir).find((name) => name.endsWith('.jsonl'))
@@ -159,103 +171,24 @@ test('две сессии одной папки: совет каждой сес�
   await dispose()
 })
 
-test('line-режим: заметка приходит готовой строкой', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
-  mkdirSync(join(dir, 'config'), { recursive: true })
-  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
-
-  const ctx = ctxFor(dir, '{"severity":"concern","guidance":"проверь границу"}')
-  ctx.options.nextDisplay = 'line'
-  const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 150))
-
-  assert.equal(ctx.entries.length, 1)
-  assert.equal(ctx.entries[0].value, 'Advisor · concern: проверь границу')
-  assert.equal(ctx.synthetics[0].text, 'Advisor · concern: проверь границу')
-
-  await dispose()
-})
-
-test('подсказка не пишется для субагента', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
-  mkdirSync(join(dir, 'config'), { recursive: true })
-  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
-
-  const ctx = ctxFor(dir, '{"suggestion":"продолжить"}')
-  ctx.event = {
-    subscribe: () => ({
-      async *[Symbol.asyncIterator]() {
-        yield { type: 'session.execution.succeeded', data: { sessionID: 'child' } }
-      },
-    }),
-  }
-  ctx.session.get = async () => ({ parentID: 'root', location: { directory: '/proj' } })
-
-  const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 150))
-
-  const stateDir = join(dir, 'state')
-  assert.deepEqual(
-    readdirSync(stateDir).filter((name) => name.startsWith('suggestion-')),
-    [],
-  )
-  const statusFile = readdirSync(stateDir).find((name) => name.startsWith('status-'))
-  const status = JSON.parse(readFileSync(join(stateDir, statusFile), 'utf8'))
-  assert.equal(status.suggest.calls, 0)
-
-  await dispose()
-})
-
-test('подсказка корневой сессии считается в статусе', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
-  mkdirSync(join(dir, 'config'), { recursive: true })
-  writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 0 }))
-
-  const ctx = ctxFor(dir, '{"suggestion":"проверь тесты"}')
-  ctx.event = {
-    subscribe: () => ({
-      async *[Symbol.asyncIterator]() {
-        yield { type: 'session.execution.succeeded', data: { sessionID: 's1' } }
-      },
-    }),
-  }
-  ctx.session.get = async () => ({ location: { directory: '/proj' } })
-  ctx.session.context = async () => [
-    { id: 'u1', type: 'user', text: 'сделай фикс' },
-    { id: 'a1', type: 'assistant', content: [{ type: 'text', text: 'сделал' }] },
-  ]
-
-  const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 200))
-
-  const stateDir = join(dir, 'state')
-  const suggestion = readdirSync(stateDir).find((name) => name.startsWith('suggestion-'))
-  assert.ok(suggestion, 'suggestion file written')
-  assert.equal(
-    JSON.parse(readFileSync(join(stateDir, suggestion), 'utf8')).text,
-    'проверь тесты',
-  )
-  const statusFile = readdirSync(stateDir).find((name) => name.startsWith('status-'))
-  const status = JSON.parse(readFileSync(join(stateDir, statusFile), 'utf8'))
-  assert.equal(status.suggest.calls, 1)
-
-  await dispose()
-})
-
-test('закрытый гейт оставляет причину пропуска в статусе', async () => {
+test('закрытый гейт оставляет причину пропуска в /advisor status', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'adv-flow-'))
   mkdirSync(join(dir, 'config'), { recursive: true })
   writeFileSync(join(dir, 'config', 'config.json'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', immuneTurns: 3 }))
 
   const ctx = ctxFor(dir, '{"severity":"concern","guidance":"совет"}')
   const dispose = await plugin.setup(ctx)
-  await new Promise((resolve) => setTimeout(resolve, 150))
+  await ctx._finished
 
-  const stateDir = join(dir, 'state')
-  const statusFile = readdirSync(stateDir).find((name) => name.startsWith('status-'))
-  const status = JSON.parse(readFileSync(join(stateDir, statusFile), 'utf8'))
-  assert.equal(status.calls, 0)
-  assert.equal(status.lastSkip.reason, 'gate')
+  let said = ''
+  ctx.session.synthetic = async ({ text }) => {
+    said = text
+  }
+  const status = ctx._commands.find((c) => c.name === 'advisor')
+  await status.execute({ sessionID: 's1', prompt: { text: 'status' } })
+
+  assert.match(said, /вызовов: 0/)
+  assert.match(said, /пропуск: gate/)
 
   await dispose()
 })

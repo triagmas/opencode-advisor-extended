@@ -9,27 +9,11 @@ import {
   parseJournal,
   ROTATE_LINES,
 } from '../../src/core/journal.js'
-import { suggestionFileName } from '../../src/core/journal-format.js'
 
 test('имя файла стабильно и различается по локации', () => {
   assert.equal(journalFileName('/a/b'), journalFileName('/a/b'))
   assert.notEqual(journalFileName('/a/b'), journalFileName('/a/c'))
   assert.match(journalFileName('/a/b'), /^journal-[0-9a-f]{8}\.jsonl$/)
-})
-
-test('у каждого сеанса свой файл подсказки', () => {
-  assert.match(
-    suggestionFileName('/a/b', 'ses_1'),
-    /^suggestion-[0-9a-f]{8}-ses_1\.json$/,
-  )
-  assert.notEqual(
-    suggestionFileName('/a/b', 'ses_1'),
-    suggestionFileName('/a/b', 'ses_2'),
-  )
-  assert.equal(
-    suggestionFileName('/a/b', '../x'),
-    suggestionFileName('/a/b', 'x'),
-  )
 })
 
 test('дозапись добавляет строку', async () => {

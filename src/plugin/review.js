@@ -4,7 +4,7 @@ import { limitText } from "../core/limits.js";
 import { markReviewed } from "../core/scope.js";
 import { modelRef } from "../core/config.js";
 import { createEmissionGuard } from "../core/guard.js";
-import { formatNote } from "../core/next-block.js";
+import { formatNote } from "../core/note.js";
 import { buildReviewPrompt, REVIEWER_SYSTEM } from "./prompts.js";
 
 const DELTA_MAX = 16_000;
@@ -57,7 +57,6 @@ export async function runReview({
   config,
   sessionID,
   state,
-  display = "card",
   now = Date.now(),
 }) {
   const model = modelRef(config);
@@ -155,7 +154,7 @@ export async function runReview({
       return { kind: "skipped", reason: "duplicate", ms };
     }
 
-    const delivered = formatNote(frame.severity, note, display);
+    const delivered = formatNote(frame.severity, note);
     try {
       if (frame.severity !== "nit") {
         await ctx.session.synthetic({

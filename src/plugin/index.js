@@ -1,39 +1,21 @@
 import { watch } from "node:fs";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { parseCommand } from "../core/command.js";
 import { DEFAULTS, modelRef, normalizeConfig } from "../core/config.js";
 import { appendRecord } from "../core/journal.js";
-import { buildProvidersSnapshot } from "../core/providers.js";
-import { journalFileName, suggestionFileName } from "../core/journal-format.js";
-import {
-  nextBlockInstruction,
-  nextLineInstruction,
-  normalizeNextDisplay,
-} from "../core/next-block.js";
-import {
-  buildNextPromptPrompt,
-  parseSuggestion,
-  agentOfferSuggestion,
-} from "../core/next-prompt.js";
+import { journalFileName } from "../core/journal-format.js";
+import { migrateLegacyData } from "../core/migrate.js";
 import { limitText } from "../core/limits.js";
 import { canReview, shouldReview } from "../core/scope.js";
-import { buildStatus, emptyCounters, statusFileName } from "../core/status.js";
 import { runReview } from "./review.js";
 
-export const PLUGIN_VERSION = "0.1.0";
+export const PLUGIN_VERSION = "0.2.0";
 
-const HEARTBEAT_MS = 10_000;
 const ANSWER_MAX = 500;
-const NOTE_KEY = "advisor-note";
-const EVENT_TYPES = [
-  "session.step.started",
-  "session.step.ended",
-  "session.execution.succeeded",
-  "session.execution.failed",
-];
+const EVENT_TYPES = ["session.step.started", "session.step.ended"];
 
 const USAGE_TEXT =
   "advisor: on | off | status | model set <provider>/<model> | model reset";
@@ -61,42 +43,30 @@ async function writeJsonAtomic(path, value) {
 }
 
 /**
- * OpenCode plugin: reviews a finished step with a separate model, delivers a
- * graded note into the agent's context, and keeps the journal and heartbeat the
- * OpenChamber panel reads.
+ * OpenCode plugin: reviews a finished step with a separate model and delivers a
+ * graded note into the agent's context. The journal on disk is the record; the
+ * plugin draws nothing.
  */
 export async function setup(ctx) {
   const options = ctx.options ?? {};
   const home = options.homeDir ?? homedir();
-  const configDir =
-    options.configDir ?? join(home, ".config", "openchamber-advisor");
-  const stateDir =
-    options.stateDir ?? join(home, ".local", "state", "openchamber-advisor");
+  const configDir = options.configDir ?? join(home, ".config", "opencode-advisor");
+  const stateDir = options.stateDir ?? join(home, ".local", "state", "opencode-advisor");
   const locationDir = resolve(String(ctx.location?.directory ?? process.cwd()));
-  // How this client shows the advisor: OpenChamber draws the card, T3 Code has
-  // no block renderer and gets a ready-made line instead.
-  const display = normalizeNextDisplay(options.nextDisplay);
-
-  const configPath = join(configDir, "config.json");
-  const statusPath = join(stateDir, statusFileName(locationDir));
-  const journalPath = join(stateDir, journalFileName(locationDir));
-  const legacySuggestionPath = join(stateDir, suggestionFileName(locationDir));
-  const suggestionPathFor = (sessionID) =>
-    join(stateDir, suggestionFileName(locationDir, sessionID));
 
   await mkdir(configDir, { recursive: true });
   await mkdir(stateDir, { recursive: true });
 
-  // One suggestion file used to serve every session of the folder; move what
-  // it holds to that session's own name, so the card keeps its text.
-  const legacySuggestion = await readJson(legacySuggestionPath);
-  if (legacySuggestion?.sessionID) {
-    await writeJsonAtomic(
-      suggestionPathFor(legacySuggestion.sessionID),
-      legacySuggestion,
-    ).catch(() => {});
+  // The extension used to be an OpenChamber one, with its own directories. The
+  // journals are the only record a person cannot recreate, so they move first.
+  if (options.migrate !== false) {
+    await migrateLegacyData({ homeDir: home, configDir, stateDir }).catch(
+      () => {},
+    );
   }
-  await unlink(legacySuggestionPath).catch(() => {});
+
+  const configPath = join(configDir, "config.json");
+  const journalPath = join(stateDir, journalFileName(locationDir));
 
   let raw = await readJson(configPath);
   if (raw === null) {
@@ -114,9 +84,6 @@ export async function setup(ctx) {
     if (!state) {
       state = {
         lastSeenID: null,
-        lastSuggestAt: 0,
-        suggesting: false,
-        suggestQueued: false,
         turns: 0,
         immuneTurns: config.immuneTurns,
         inFlight: false,
@@ -129,68 +96,10 @@ export async function setup(ctx) {
     return state;
   };
 
-  const counters = emptyCounters();
+  const counters = { calls: 0, drops: { empty: 0, unparsed: 0, error: 0 } };
   let lastAdviceAt = null;
   let lastMs = null;
-  let cooldownUntil = null;
-
-  let status = buildStatus(
-    {
-      ...emptyCounters(),
-      startedAt: Date.now(),
-      pluginVersion: PLUGIN_VERSION,
-    },
-    {},
-    Date.now(),
-  );
-  let queue = Promise.resolve();
-
-  const flush = (patch = {}) => {
-    status = buildStatus(status, patch, Date.now());
-    const snapshot = { ...status, at: Date.now() };
-    queue = queue
-      .then(() => writeJsonAtomic(statusPath, snapshot))
-      .catch(() => {});
-    return queue;
-  };
-
-  await flush({
-    enabled: config.enabled,
-    model: modelLabel(config),
-    reason: errors[0] ?? null,
-    appVersion: ctx.app?.version ?? null,
-    lastAdviceAt: null,
-    lastMs: null,
-    cooldownUntil: null,
-  });
-
-  // The panel's model picker reads this snapshot: only models this server can
-  // actually call, refreshed while the plugin lives.
-  const providersPath = join(stateDir, "providers.json");
-  let snapshotTick = 0;
-  async function writeProviders() {
-    try {
-      const [models, providers] = await Promise.all([
-        ctx.model?.list?.({ location: { directory: locationDir } }),
-        ctx.provider?.list?.({ location: { directory: locationDir } }),
-      ]);
-      const snapshot = buildProvidersSnapshot(
-        models?.data ?? models,
-        providers?.data ?? providers,
-      );
-      if (snapshot.providers.length > 0)
-        await writeJsonAtomic(providersPath, snapshot);
-    } catch {
-      // The panel falls back to free-text provider/model fields.
-    }
-  }
-  void writeProviders();
-
-  const heartbeat = setInterval(() => {
-    void flush();
-    if (++snapshotTick % 6 === 0) void writeProviders();
-  }, HEARTBEAT_MS);
-  heartbeat.unref?.();
+  let lastSkip = null;
 
   async function reloadConfig() {
     const fresh = await readJson(configPath);
@@ -203,16 +112,11 @@ export async function setup(ctx) {
       // A config edit is one of the two ways out of a model-error silence.
       state.muted = false;
     }
-    await flush({
-      enabled: config.enabled,
-      model: modelLabel(config),
-      reason: errors[0] ?? null,
-    });
   }
 
   let watcher;
   try {
-    // Watch the directory, not the file: the panel replaces config.json with an
+    // Watch the directory, not the file: editors replace config.json with an
     // atomic rename, and a watch pinned to the old inode goes silent after it.
     const configName = basename(configPath);
     watcher = watch(
@@ -236,7 +140,7 @@ export async function setup(ctx) {
 
   const reply = (body) => {
     const missing = errors.includes("model-missing")
-      ? " Модель не задана (model-missing): укажите provider/model в панели или /advisor model set <provider>/<model>."
+      ? " Модель не задана (model-missing): укажите provider/model в config.json или /advisor model set <provider>/<model>."
       : "";
     return limitText(`Advisor: ${body}${missing}`, ANSWER_MAX);
   };
@@ -244,25 +148,18 @@ export async function setup(ctx) {
   function statusLine(session) {
     const state = config.enabled ? "включён" : "выключен";
     const model = modelLabel(config) ?? "нет (model-missing)";
-    const last = status.lastAdviceAt
-      ? new Date(status.lastAdviceAt).toLocaleTimeString()
+    const last = lastAdviceAt
+      ? new Date(lastAdviceAt).toLocaleTimeString()
       : "советов ещё не было";
-    const latency =
-      typeof status.lastMs === "number" ? `${status.lastMs} мс` : "—";
+    const latency = typeof lastMs === "number" ? `${lastMs} мс` : "—";
     const mute = session?.disabled
       ? "сессия выключена"
       : session?.muted
         ? "молчит после ошибки модели"
         : "сессия включена";
-    const drop =
-      status.drops.empty + status.drops.unparsed + status.drops.error;
-    const suggest = status.suggest
-      ? `, подсказок: ${status.suggest.calls} (пусто ${status.suggest.empty}, ошибок ${status.suggest.error})`
-      : "";
-    const skip = status.lastSkip?.reason
-      ? `; пропуск: ${status.lastSkip.reason}`
-      : "";
-    return `состояние: ${state}, ${mute}; модель: ${model}; вызовов: ${status.calls}; дропов: ${drop}${suggest}${skip}; задержка: ${latency}; ${last}`;
+    const drop = counters.drops.empty + counters.drops.unparsed + counters.drops.error;
+    const skip = lastSkip?.reason ? `; пропуск: ${lastSkip.reason}` : "";
+    return `состояние: ${state}, ${mute}; модель: ${model}; вызовов: ${counters.calls}; дропов: ${drop}${skip}; задержка: ${latency}; ${last}`;
   }
 
   async function runCommand({ sessionID, prompt }) {
@@ -325,7 +222,7 @@ export async function setup(ctx) {
     try {
       await ctx.session.instructions?.entry?.remove({
         sessionID,
-        key: NOTE_KEY,
+        key: "advisor-note",
       });
     } catch {
       // No entry support (older server): the note simply was not set.
@@ -333,38 +230,26 @@ export async function setup(ctx) {
   }
 
   async function handleEvent(event) {
-    switch (event?.type) {
-      case "session.step.started": {
-        const sessionID = event.data?.sessionID;
-        if (!sessionID) return;
-        stateOf(sessionID).turns += 1;
-        await clearNote(sessionID);
-        return;
-      }
-      case "session.step.ended": {
-        const sessionID = event.data?.sessionID;
-        if (!sessionID) return;
-        await onStepEnded(sessionID);
-        return;
-      }
-      case "session.execution.succeeded":
-      case "session.execution.failed": {
-        const sessionID = event.data?.sessionID;
-        if (!sessionID) return;
-        // The turn is over: this is the context the next message will follow,
-        // so the card gets a fresh prediction now, not from a half-done step.
-        await suggestNext(sessionID, true);
-        return;
-      }
-      default:
+    if (event?.type === "session.step.started") {
+      const sessionID = event.data?.sessionID;
+      if (!sessionID) return;
+      stateOf(sessionID).turns += 1;
+      await clearNote(sessionID);
+      return;
+    }
+    if (event?.type === "session.step.ended") {
+      const sessionID = event.data?.sessionID;
+      if (!sessionID) return;
+      await onStepEnded(sessionID);
     }
   }
 
   async function onStepEnded(sessionID) {
     // Why a step was not reviewed is the first thing a silent session is asked
-    // about; the heartbeat keeps the last reason so `/advisor status` can answer.
-    const noteSkip = (reason) =>
-      flush({ lastSkip: { reason, at: Date.now() } }).catch(() => {});
+    // about; `/advisor status` answers from the last reason kept here.
+    const noteSkip = (reason) => {
+      lastSkip = { reason, at: Date.now() };
+    };
 
     const state = stateOf(sessionID);
     if (state.inFlight) return noteSkip("in-flight");
@@ -387,22 +272,15 @@ export async function setup(ctx) {
       return noteSkip("subagent");
     if (state.inFlight) return noteSkip("in-flight");
 
-    const started = Date.now();
     const result = await runReview({
       ctx,
       config,
       sessionID,
       state,
-      display,
-      now: started,
+      now: Date.now(),
     });
-    if (result.kind === "skipped") void noteSkip(result.reason ?? "skipped");
-
-    const patch = {};
-    if (result.kind !== "skipped") {
-      counters.calls += 1;
-      patch.calls = counters.calls;
-    }
+    if (result.kind === "skipped") noteSkip(result.reason ?? "skipped");
+    if (result.kind !== "skipped") counters.calls += 1;
 
     if (result.kind === "dropped") {
       const reason =
@@ -412,17 +290,12 @@ export async function setup(ctx) {
           ? result.reason
           : "error";
       counters.drops[reason] += 1;
-      patch.drops = { ...counters.drops };
       if (reason === "error") state.muted = true;
     }
 
     if (result.kind === "delivered") {
       lastAdviceAt = Date.now();
       lastMs = result.ms ?? null;
-      cooldownUntil = state.cooldownUntil;
-      patch.lastAdviceAt = lastAdviceAt;
-      patch.lastMs = lastMs;
-      patch.cooldownUntil = cooldownUntil;
       try {
         await appendRecord(journalPath, {
           kind: "advice",
@@ -436,117 +309,6 @@ export async function setup(ctx) {
         });
       } catch {
         // A broken journal must not break the review loop.
-      }
-    }
-
-    if (Object.keys(patch).length > 0) await flush(patch);
-  }
-
-  const SUGGEST_EVERY_MS = 90_000;
-
-  /** Writes the panel's suggested next message; never sends it anywhere. */
-  async function suggestNext(sessionID, force = false) {
-    const state = stateOf(sessionID);
-    if (!config.nextPrompt || state.disabled) return;
-    if (state.suggesting) {
-      // A forced call still runs after the one in flight, not instead of it.
-      if (force) state.suggestQueued = true;
-      return;
-    }
-    if (!force && Date.now() - (state.lastSuggestAt ?? 0) < SUGGEST_EVERY_MS)
-      return;
-    const model = modelRef(config);
-    if (!model) return;
-
-    // Same rule as the review: a session from another folder is not ours, and a
-    // subagent's next message is nobody's card. Its prediction would cost a call
-    // and land in a file no panel shows.
-    try {
-      const info = await ctx.session.get({ sessionID });
-      const sessionDir = info?.location?.directory;
-      if (sessionDir && resolve(String(sessionDir)) !== locationDir) return;
-      const archived = Boolean(info?.time?.archived ?? info?.archived);
-      if (!shouldReview({ parentID: info?.parentID, archived })) return;
-    } catch {
-      return;
-    }
-
-    const countSuggest = async (key) => {
-      counters.suggest[key] += 1;
-      await flush({ suggest: { ...counters.suggest } });
-    };
-
-    let raw;
-    try {
-      raw = await ctx.session.context({ sessionID });
-    } catch {
-      await countSuggest("error");
-      return;
-    }
-    const messages = (Array.isArray(raw) ? raw : [])
-      .map((message) => ({
-        role: message?.type ?? message?.role ?? "user",
-        text: Array.isArray(message?.content)
-          ? message.content
-              .filter(
-                (part) =>
-                  part?.type === "text" && typeof part.text === "string",
-              )
-              .map((part) => part.text)
-              .join("\n")
-          : typeof message?.text === "string"
-            ? message.text
-            : "",
-        description: message?.description,
-      }))
-      .filter(
-        (message) => !String(message.description ?? "").startsWith("advisor:"),
-      )
-      .filter((message) => message.text.trim() !== "")
-      .slice(-20);
-    if (messages.length === 0) return;
-
-    const transcript = messages
-      .map(
-        (message) =>
-          `${message.role === "user" ? "человек" : "агент"}: ${message.text}`,
-      )
-      .join("\n\n");
-
-    state.suggesting = true;
-    try {
-      await countSuggest("calls");
-      const answer = await ctx.experimental.generate.text({
-        model: { providerID: model.providerID, id: model.modelID },
-        prompt: buildNextPromptPrompt(transcript),
-      });
-      const text =
-        parseSuggestion(answer?.text, config.nextPromptMaxChars) ??
-        agentOfferSuggestion(
-          messages.filter((message) => message.role !== "user").at(-1)?.text,
-          config.nextPromptMaxChars,
-        );
-      if (!text) {
-        // The request is satisfied (or needs the person): drop the stale offer.
-        await countSuggest("empty");
-        await unlink(suggestionPathFor(sessionID)).catch(() => {});
-        return;
-      }
-      state.lastSuggestAt = Date.now();
-      await writeJsonAtomic(suggestionPathFor(sessionID), {
-        at: state.lastSuggestAt,
-        sessionID,
-        text,
-      });
-    } catch {
-      // A suggestion is a nicety: a failed call leaves the previous one, but the
-      // status still shows the failure instead of hiding it.
-      await countSuggest("error");
-    } finally {
-      state.suggesting = false;
-      if (state.suggestQueued) {
-        state.suggestQueued = false;
-        void suggestNext(sessionID, true);
       }
     }
   }
@@ -565,69 +327,19 @@ export async function setup(ctx) {
     }
   }
 
-  // The card is an extension UI block, and only the agent can place one in a
-  // reply. One short line per request is the whole price of it. The hook itself
-  // must stay synchronous: the request is assembled right after it returns.
-  const ownedSessions = new Map();
-  const rememberOwner = (sessionID) => {
-    if (ownedSessions.has(sessionID)) return;
-    // Assume the session is ours until the lookup says otherwise.
-    ownedSessions.set(sessionID, true);
-    void ctx.session
-      .get({ sessionID })
-      .then((info) => {
-        const sessionDir = info?.location?.directory;
-        ownedSessions.set(
-          sessionID,
-          !sessionDir || resolve(String(sessionDir)) === locationDir,
-        );
-      })
-      .catch(() => {});
-  };
-  let disposeContextHook = () => {};
-  // The card is an instruction the agent must repeat, so each display mode has
-  // its own text. `line` never asks for a block: it is the mode for clients
-  // that would print the block as raw code.
-  const instructionFor = () => {
-    if (display === "card") return nextBlockInstruction(config.nextPrompt);
-    if (display === "line") return nextLineInstruction(config.enabled);
-    return "";
-  };
-  try {
-    const hook = await ctx.session.hook("context", (event) => {
-      if (!Array.isArray(event?.system)) return;
-      const sessionID = event.sessionID;
-      if (!sessionID) return;
-      rememberOwner(sessionID);
-      if (ownedSessions.get(sessionID) === false) return;
-      const text = instructionFor();
-      if (!text) return;
-      event.system.push({ type: "text", text });
-    });
-    if (typeof hook === "function") disposeContextHook = hook;
-    else if (typeof hook?.dispose === "function")
-      disposeContextHook = () => hook.dispose();
-  } catch {
-    // An OpenCode release without the context hook: the card is simply absent.
-  }
-
   const controller = new AbortController();
   const subscription = ctx.event.subscribe({
     types: EVENT_TYPES,
     signal: controller.signal,
   });
   let unsubscribe = () => {};
-  if (
-    subscription &&
-    typeof subscription[Symbol.asyncIterator] === "function"
-  ) {
+  if (subscription && typeof subscription[Symbol.asyncIterator] === "function") {
     void consume(subscription);
   } else if (typeof subscription === "function") {
     unsubscribe = subscription;
   }
 
   return async function dispose() {
-    clearInterval(heartbeat);
     controller.abort();
     try {
       watcher?.close();
@@ -650,12 +362,6 @@ export async function setup(ctx) {
       // Nothing to undo.
     }
     sessions.clear();
-    ownedSessions.clear();
-    try {
-      disposeContextHook();
-    } catch {
-      // Already disposed with the location.
-    }
   };
 }
 

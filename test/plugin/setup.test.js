@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, renameSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "../../src/plugin/index.js";
@@ -23,6 +29,7 @@ function fakeCtx(options = {}) {
   return {
     app: { version: "2.3.2" },
     options: {
+      homeDir: dir,
       configDir: join(dir, "config"),
       stateDir: join(dir, "state"),
       ...options,
@@ -64,7 +71,7 @@ test("регистрирует /advisor и подписку на шаги", asyn
   await dispose();
 });
 
-test("хук контекста дописывает карточку подсказки синхронно", async () => {
+test("хук контекста не подключается: плагин ничего не рисует", async () => {
   const ctx = fakeCtx();
   const hooks = {};
   ctx.session.hook = async (name, handler) => {
@@ -72,13 +79,16 @@ test("хук контекста дописывает карточку подск
     return { dispose() {} };
   };
   const dispose = await plugin.setup(ctx);
-  assert.equal(typeof hooks.context, "function");
+  assert.equal(hooks.context, undefined);
 
-  const event = { sessionID: "s1", system: [] };
-  hooks.context(event);
-  assert.equal(event.system.length, 1);
-  assert.match(event.system[0].text, /AdvisorNext\(\)/);
+  await dispose();
+});
 
+test("в stateDir нет файлов статуса и подсказок", async () => {
+  const ctx = fakeCtx();
+  const dispose = await plugin.setup(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.deepEqual(readdirSync(ctx.options.stateDir), []);
   await dispose();
 });
 
@@ -96,6 +106,30 @@ test("без модели команда status сообщает причину"
     delivery: "steer",
   });
   assert.match(said, /model-missing|модель/i);
+  await dispose();
+});
+
+test("старый конфиг из каталога OpenChamber подхватывается при старте", async () => {
+  const ctx = fakeCtx();
+  const legacyConfig = join(
+    ctx.options.homeDir,
+    ".config",
+    "openchamber-advisor",
+  );
+  mkdirSync(legacyConfig, { recursive: true });
+  writeFileSync(
+    join(legacyConfig, "config.json"),
+    JSON.stringify({ enabled: true, provider: "old", model: "model" }),
+  );
+
+  const dispose = await plugin.setup(ctx);
+  let said = "";
+  ctx.session.synthetic = async ({ text }) => {
+    said = text;
+  };
+  await ctx._commands[0].execute({ sessionID: "s1", prompt: { text: "status" } });
+
+  assert.match(said, /old\/model/);
   await dispose();
 });
 
